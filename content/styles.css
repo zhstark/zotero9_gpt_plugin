@@ -1,0 +1,78 @@
+window {
+  min-width: 520px;
+  min-height: 460px;
+  font: menu;
+  color: #202124;
+  background: #f7f8fa;
+}
+
+.popup-root,
+.preferences-root {
+  padding: 14px;
+  gap: 8px;
+}
+
+.section-label,
+.field-label {
+  font-weight: 600;
+  color: #24292f;
+}
+
+.text-box {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #c9d1d9;
+  border-radius: 6px;
+  padding: 8px;
+  color: #1f2328;
+  background: #ffffff;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.selected {
+  min-height: 96px;
+}
+
+.result {
+  min-height: 180px;
+}
+
+.context-note {
+  min-height: 18px;
+  color: #6e7781;
+}
+
+.toolbar {
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0;
+}
+
+.status {
+  color: #57606a;
+}
+
+.status.error {
+  color: #b42318;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: 150px minmax(220px, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.field-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #c9d1d9;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.settings-actions {
+  margin-top: 12px;
+  gap: 8px;
+}
