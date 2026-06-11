@@ -31,6 +31,25 @@ A buildless Zotero 9.0.x plugin for translating selected paper text with the off
    /Applications/Zotero.app/Contents/MacOS/zotero -purgecaches -ZoteroDebugText
    ```
 
+If Zotero does not detect the proxy file, fully quit Zotero and remove these two profile cache preferences from `prefs.js`:
+
+```text
+user_pref("extensions.lastAppBuildId", "..."); 
+user_pref("extensions.lastAppVersion", "...");
+```
+
+Then start Zotero again with `-purgecaches`.
+
+## XPI Install
+
+The repository also supports packaging as an `.xpi` file:
+
+```bash
+zip -r -FS paper-translation-popup.xpi manifest.json bootstrap.js content
+```
+
+Install it from Zotero with Tools > Add-ons > gear menu > Install Add-on From File.
+
 ## Configure
 
 Open Zotero settings and find the Paper Translation Popup pane. Set:

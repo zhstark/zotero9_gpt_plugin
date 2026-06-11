@@ -9,7 +9,7 @@
     "zotero": {
       "id": "paper-translation-popup@lobster.local",
       "strict_min_version": "9.0",
-      "strict_max_version": "9.0.*"
+      "strict_max_version": "*"
     }
   }
 }
