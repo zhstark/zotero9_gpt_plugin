@@ -17,7 +17,7 @@ test("builds chat payload with selected text and context", () => {
   });
 
   assert.equal(payload.model, "gpt-4o-mini");
-  assert.equal(payload.temperature, 0.2);
+  assert.equal(Object.hasOwn(payload, "temperature"), false);
   assert.match(payload.messages[1].content, /selected_text/);
   assert.match(payload.messages[1].content, /Photosynthesis improves biomass/);
   assert.match(payload.messages[1].content, /context/);

@@ -20,7 +20,6 @@
   function buildChatPayload({ model, selectedText, context }) {
     return {
       model,
-      temperature: 0.2,
       messages: [
         {
           role: "system",

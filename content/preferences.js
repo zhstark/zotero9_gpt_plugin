@@ -9,32 +9,23 @@
 
   let initialized = false;
 
-  if (document.readyState === "complete" || document.readyState === "interactive") {
-    initWhenReady();
-  }
-  window.addEventListener("load", initWhenReady);
-  document.addEventListener("DOMContentLoaded", initWhenReady);
-
-  function initWhenReady() {
+  function init() {
     if (initialized || !document.getElementById("openai-token")) {
       return;
     }
     initialized = true;
-    init();
-  }
 
-  function init() {
     tokenInput = document.getElementById("openai-token");
     modelInput = document.getElementById("openai-model");
     statusNode = document.getElementById("settings-status");
 
-    tokenInput.value = Zotero.Prefs.get(PREF_TOKEN) || "";
-    modelInput.value = Zotero.Prefs.get(PREF_MODEL) || DEFAULT_MODEL;
-
-    document.getElementById("save-settings").addEventListener("command", saveSettings);
+    tokenInput.value = prefString(PREF_TOKEN) || "";
+    modelInput.value = prefString(PREF_MODEL) || DEFAULT_MODEL;
   }
 
   function saveSettings() {
+    init();
+
     const token = String(tokenInput.value || "").trim();
     const model = String(modelInput.value || "").trim() || DEFAULT_MODEL;
 
@@ -45,4 +36,17 @@
     statusNode.setAttribute("value", "已保存。");
     statusNode.classList.remove("error");
   }
+
+  function prefString(prefName) {
+    const value = Zotero.Prefs.get(prefName);
+    if (typeof value !== "string" || value === "undefined") {
+      return "";
+    }
+    return value;
+  }
+
+  window.PaperTranslationPopupPrefs = {
+    init,
+    saveSettings,
+  };
 })();

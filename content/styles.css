@@ -1,6 +1,6 @@
 window {
   min-width: 520px;
-  min-height: 460px;
+  min-height: 320px;
   font: menu;
   color: #202124;
   background: #f7f8fa;
@@ -30,12 +30,8 @@ window {
   line-height: 1.45;
 }
 
-.selected {
-  min-height: 96px;
-}
-
 .result {
-  min-height: 180px;
+  min-height: 120px;
 }
 
 .context-note {

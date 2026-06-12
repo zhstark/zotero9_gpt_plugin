@@ -1,22 +1,30 @@
-<?xml version="1.0"?>
-<?xml-stylesheet href="styles.css" type="text/css"?>
 <vbox
   id="paper-translation-popup-preferences"
   class="preferences-root"
+  onload="PaperTranslationPopupPrefs.init()"
   xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
   xmlns:html="http://www.w3.org/1999/xhtml">
-  <label class="section-label" value="Paper Translation Popup" />
+  <label>
+    <html:h2>Paper Translation Popup</html:h2>
+  </label>
 
   <html:div class="settings-grid">
     <html:label class="field-label" for="openai-token">OpenAI access token</html:label>
-    <html:input id="openai-token" class="field-input" type="password" autocomplete="off" />
+    <html:input
+      id="openai-token"
+      class="field-input"
+      type="password"
+      autocomplete="off" />
 
     <html:label class="field-label" for="openai-model">OpenAI model</html:label>
-    <html:input id="openai-model" class="field-input" type="text" />
+    <html:input
+      id="openai-model"
+      class="field-input"
+      type="text" />
   </html:div>
 
   <hbox class="settings-actions">
-    <button id="save-settings" label="保存" />
+    <button id="save-settings" label="保存" oncommand="PaperTranslationPopupPrefs.saveSettings()" />
     <label id="settings-status" class="status" value="" />
   </hbox>
 </vbox>

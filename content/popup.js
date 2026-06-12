@@ -1,7 +1,6 @@
 (function () {
   const CONTEXT_WINDOW = 600;
 
-  let selectedTextNode;
   let contextNoteNode;
   let translateButton;
   let statusNode;
@@ -12,7 +11,6 @@
   window.addEventListener("load", init);
 
   function init() {
-    selectedTextNode = document.getElementById("selected-text");
     contextNoteNode = document.getElementById("context-note");
     translateButton = document.getElementById("translate-button");
     statusNode = document.getElementById("status");
@@ -42,15 +40,13 @@
 
   function refreshSelectionPreview() {
     const selectionData = readSelectionData();
-    selectedTextNode.value = selectionData.selectedText;
-    contextNoteNode.setAttribute("value", selectionData.hasContext ? "" : "未获取到上下文，翻译时将仅使用选中文本。");
+    contextNoteNode.setAttribute("value", formatContextStatus(selectionData, false));
   }
 
   async function translateSelection() {
     resultNode.value = "";
     const selectionData = readSelectionData();
-    selectedTextNode.value = selectionData.selectedText;
-    contextNoteNode.setAttribute("value", selectionData.hasContext ? "" : "未获取到上下文，已仅翻译选中文本。");
+    contextNoteNode.setAttribute("value", formatContextStatus(selectionData, true));
 
     if (!prefs.token) {
       setStatus("请先在 Zotero 设置中配置 OpenAI access token。", true);
@@ -90,6 +86,13 @@
       }
     }
     return { selectedText: "", context: "", hasContext: false };
+  }
+
+  function formatContextStatus(selectionData, isTranslating) {
+    if (selectionData.hasContext) {
+      return "已获取上下文，将随划取内容一起发送。";
+    }
+    return isTranslating ? "未获取到上下文，已仅翻译划取内容。" : "未获取到上下文，翻译时将仅使用划取内容。";
   }
 
   function getCandidateWindows() {
@@ -143,9 +146,10 @@
     }
 
     const range = selection.getRangeAt(0);
-    let node = range.commonAncestorContainer;
-    if (node && node.nodeType === Node.TEXT_NODE) {
-      node = node.parentNode;
+    const node = getContextContainerNode(range.commonAncestorContainer);
+    const rangeContext = readContextFromRange(node, range);
+    if (rangeContext) {
+      return rangeContext;
     }
 
     const containerText = normalizeText(node && node.textContent ? node.textContent : "");
@@ -162,6 +166,58 @@
     const end = Math.min(containerText.length, index + selectedText.length + CONTEXT_WINDOW);
     const context = containerText.slice(start, end).trim();
     return context === selectedText ? "" : context;
+  }
+
+  function readContextFromRange(containerNode, selectionRange) {
+    if (!containerNode || !selectionRange || !containerNode.ownerDocument) {
+      return "";
+    }
+
+    try {
+      const doc = containerNode.ownerDocument;
+      const beforeRange = doc.createRange();
+      beforeRange.selectNodeContents(containerNode);
+      beforeRange.setEnd(selectionRange.startContainer, selectionRange.startOffset);
+
+      const afterRange = doc.createRange();
+      afterRange.selectNodeContents(containerNode);
+      afterRange.setStart(selectionRange.endContainer, selectionRange.endOffset);
+
+      const beforeText = beforeRange.toString();
+      const selectedText = selectionRange.toString();
+      const afterText = afterRange.toString();
+
+      const beforeContext = beforeText.slice(Math.max(0, beforeText.length - CONTEXT_WINDOW));
+      const afterContext = afterText.slice(0, CONTEXT_WINDOW);
+      const context = normalizeText(beforeContext + " " + selectedText + " " + afterContext);
+      return context && context !== normalizeText(selectedText) ? context : "";
+    } catch (error) {
+      logError(error);
+      return "";
+    }
+  }
+
+  function getContextContainerNode(node) {
+    if (!node) {
+      return null;
+    }
+
+    let element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    if (!element) {
+      return node;
+    }
+
+    if (typeof element.closest === "function") {
+      const pageContainer = element.closest(".page, .textLayer, [data-page-number]");
+      if (pageContainer) {
+        return pageContainer;
+      }
+    }
+
+    for (let depth = 0; element.parentElement && depth < 6; depth++) {
+      element = element.parentElement;
+    }
+    return element;
   }
 
   function normalizeText(text) {

@@ -1,15 +1,16 @@
 {
   "manifest_version": 2,
   "name": "Paper Translation Popup",
-  "version": "0.1.0",
+  "version": "0.1.9",
   "description": "Translate selected paper text with OpenAI from a compact Zotero popup.",
   "author": "lobster",
   "homepage_url": "https://github.com/local/zotero-translation-popup",
   "applications": {
     "zotero": {
       "id": "paper-translation-popup@lobster.local",
-      "strict_min_version": "9.0",
-      "strict_max_version": "*"
+      "update_url": "https://example.com/paper-translation-popup/updates.json",
+      "strict_min_version": "6.999",
+      "strict_max_version": "9.0.*"
     }
   }
 }
