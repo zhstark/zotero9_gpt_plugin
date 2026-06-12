@@ -4,11 +4,23 @@ A buildless Zotero 9.0.x plugin for translating selected paper text with the off
 
 ## Features
 
-- Open a compact popup from Zotero with `Cmd+Shift+T` on macOS.
+- Open a compact popup from Zotero with `Cmd+Shift+T` on macOS or `Ctrl+Shift+T` on Windows/Linux.
 - Configure an OpenAI access token and model in Zotero settings.
 - Translate selected text to Chinese.
 - Send best-effort nearby context when it can be read from the current selection.
 - Fall back to translating only the selected text when context is unavailable.
+
+## XPI Install
+
+Use the bundled `paper-translation-popup.xpi`, or rebuild it from source:
+
+```bash
+zip -r -FS paper-translation-popup.xpi manifest.json bootstrap.js content
+```
+
+Install it from Zotero with Tools > Add-ons > gear menu > Install Add-on From File.
+
+After replacing an installed XPI, fully restart Zotero so the updated bootstrap code is loaded.
 
 ## Development Install on macOS
 
@@ -39,16 +51,6 @@ user_pref("extensions.lastAppVersion", "...");
 ```
 
 Then start Zotero again with `-purgecaches`.
-
-## XPI Install
-
-The repository also supports packaging as an `.xpi` file:
-
-```bash
-zip -r -FS paper-translation-popup.xpi manifest.json bootstrap.js content
-```
-
-Install it from Zotero with Tools > Add-ons > gear menu > Install Add-on From File.
 
 ## Zotero 9 Failure Notes
 
@@ -87,7 +89,7 @@ https://api.openai.com/v1/chat/completions
 
 1. Open a PDF or paper in Zotero.
 2. Select text in the reader.
-3. Press `Cmd+Shift+T`, or choose Tools > 翻译选中文本.
+3. Press `Cmd+Shift+T` on macOS, press `Ctrl+Shift+T` on Windows/Linux, or choose Tools > 翻译划取内容.
 4. Click 翻译 in the popup.
 
 The translation is displayed only in the popup and is not saved to Zotero.
@@ -105,7 +107,8 @@ Manual Zotero checks:
 
 - Zotero recognizes the plugin.
 - The settings pane saves and reloads token/model.
-- `Cmd+Shift+T` opens the popup.
-- Selected text appears in the popup.
+- `Cmd+Shift+T` on macOS or `Ctrl+Shift+T` on Windows/Linux opens the popup.
+- Clicking 翻译 reads the current reader selection.
+- The context status shows whether nearby context was captured.
 - Translation works with a valid token and model.
 - Missing token, missing selection, and failed OpenAI requests show clear messages.

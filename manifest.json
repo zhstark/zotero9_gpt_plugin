@@ -4,7 +4,7 @@
   "version": "0.1.9",
   "description": "Translate selected paper text with OpenAI from a compact Zotero popup.",
   "author": "lobster",
-  "homepage_url": "https://github.com/local/zotero-translation-popup",
+  "homepage_url": "https://github.com/zhstark/zotero9_gpt_plugin",
   "applications": {
     "zotero": {
       "id": "paper-translation-popup@lobster.local",
