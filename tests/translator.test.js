@@ -38,6 +38,20 @@ test("rejects empty chat completion response", () => {
   );
 });
 
+test("counts extracted words without double-counting selected text inside context", () => {
+  assert.equal(translator.countExtractedWords({
+    selectedText: "photosynthesis improves biomass",
+    context: "In crop science photosynthesis improves biomass under stress",
+  }), 8);
+});
+
+test("counts selected text and context when context does not contain the selection", () => {
+  assert.equal(translator.countExtractedWords({
+    selectedText: "source phrase",
+    context: "nearby context words",
+  }), 5);
+});
+
 test("sends official OpenAI chat completions request", async () => {
   let requestUrl = "";
   let requestOptions = null;

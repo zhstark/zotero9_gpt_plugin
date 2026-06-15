@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Paper Translation Popup",
-  "version": "0.1.9",
+  "version": "0.1.12",
   "description": "Translate selected paper text with OpenAI from a compact Zotero popup.",
   "author": "lobster",
   "homepage_url": "https://github.com/zhstark/zotero9_gpt_plugin",

@@ -1,9 +1,9 @@
 window {
-  min-width: 520px;
-  min-height: 320px;
+  min-width: 620px;
+  min-height: 300px;
   font: menu;
-  color: #202124;
-  background: #f7f8fa;
+  color: #e5e7eb;
+  background: #1f2937;
 }
 
 .popup-root,
@@ -15,13 +15,13 @@ window {
 .section-label,
 .field-label {
   font-weight: 600;
-  color: #24292f;
+  color: #f8fafc;
 }
 
 .text-box {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid #c9d1d9;
+  border: 1px solid #94a3b8;
   border-radius: 6px;
   padding: 8px;
   color: #1f2328;
@@ -34,23 +34,18 @@ window {
   min-height: 120px;
 }
 
-.context-note {
-  min-height: 18px;
-  color: #6e7781;
-}
-
 .toolbar {
   align-items: center;
   gap: 10px;
-  margin: 4px 0;
+  margin: 0 0 4px;
 }
 
 .status {
-  color: #57606a;
+  color: #cbd5e1;
 }
 
 .status.error {
-  color: #b42318;
+  color: #fecaca;
 }
 
 .settings-grid {
@@ -63,7 +58,7 @@ window {
 .field-input {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid #c9d1d9;
+  border: 1px solid #94a3b8;
   border-radius: 6px;
   padding: 6px 8px;
 }

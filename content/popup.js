@@ -1,7 +1,6 @@
 (function () {
   const CONTEXT_WINDOW = 600;
 
-  let contextNoteNode;
   let translateButton;
   let statusNode;
   let resultNode;
@@ -11,7 +10,6 @@
   window.addEventListener("load", init);
 
   function init() {
-    contextNoteNode = document.getElementById("context-note");
     translateButton = document.getElementById("translate-button");
     statusNode = document.getElementById("status");
     resultNode = document.getElementById("translation-result");
@@ -21,7 +19,6 @@
     prefs = ZoteroTranslationTranslator.normalizeSettings(args.prefs || readPrefsFromZotero());
 
     translateButton.addEventListener("command", translateSelection);
-    refreshSelectionPreview();
   }
 
   function getArgs() {
@@ -38,15 +35,9 @@
     };
   }
 
-  function refreshSelectionPreview() {
-    const selectionData = readSelectionData();
-    contextNoteNode.setAttribute("value", formatContextStatus(selectionData, false));
-  }
-
   async function translateSelection() {
     resultNode.value = "";
     const selectionData = readSelectionData();
-    contextNoteNode.setAttribute("value", formatContextStatus(selectionData, true));
 
     if (!prefs.token) {
       setStatus("请先在 Zotero 设置中配置 OpenAI access token。", true);
@@ -59,7 +50,7 @@
     }
 
     setBusy(true);
-    setStatus("正在翻译...", false);
+    setStatus(formatRequestWordCountStatus(selectionData), false);
 
     try {
       const translation = await ZoteroTranslationTranslator.translate({
@@ -88,11 +79,8 @@
     return { selectedText: "", context: "", hasContext: false };
   }
 
-  function formatContextStatus(selectionData, isTranslating) {
-    if (selectionData.hasContext) {
-      return "已获取上下文，将随划取内容一起发送。";
-    }
-    return isTranslating ? "未获取到上下文，已仅翻译划取内容。" : "未获取到上下文，翻译时将仅使用划取内容。";
+  function formatRequestWordCountStatus(selectionData) {
+    return "正在请求 API，已传输 " + ZoteroTranslationTranslator.countExtractedWords(selectionData) + " 个单词。";
   }
 
   function getCandidateWindows() {

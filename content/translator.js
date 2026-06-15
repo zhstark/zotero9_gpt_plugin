@@ -52,6 +52,27 @@
     return translation;
   }
 
+  function countExtractedWords({ selectedText, context }) {
+    const selected = normalizeText(selectedText);
+    const expandedContext = normalizeText(context);
+    if (!expandedContext) {
+      return countWords(selected);
+    }
+    if (!selected || expandedContext.indexOf(selected) !== -1) {
+      return countWords(expandedContext);
+    }
+    return countWords(selected) + countWords(expandedContext);
+  }
+
+  function countWords(text) {
+    const matches = String(text || "").match(/[A-Za-z0-9]+(?:[’'-][A-Za-z0-9]+)*/g);
+    return matches ? matches.length : 0;
+  }
+
+  function normalizeText(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
   async function translate({ fetchImpl, token, model, selectedText, context }) {
     const request = fetchImpl || fetch;
     const payload = buildChatPayload({ model, selectedText, context });
@@ -77,6 +98,7 @@
     normalizeSettings,
     buildChatPayload,
     parseChatCompletion,
+    countExtractedWords,
     translate,
   };
 });

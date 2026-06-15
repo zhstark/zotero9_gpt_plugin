@@ -278,7 +278,7 @@ function togglePanel(window) {
     panel.setAttribute("hidden", "hidden");
   }
   if (isHidden) {
-    refreshSelectionPreview(window);
+    installShortcutListeners(window);
   }
 }
 
@@ -296,32 +296,36 @@ function getOrCreatePanel(window) {
     "position: fixed",
     "right: 24px",
     "top: 72px",
-    "width: 520px",
+    "width: 620px",
     "max-width: calc(100vw - 48px)",
     "z-index: 2147483647",
     "box-sizing: border-box",
     "padding: 14px",
-    "border: 1px solid #c9d1d9",
+    "border: 1px solid #334155",
     "border-radius: 8px",
-    "background: #f7f8fa",
-    "box-shadow: 0 12px 34px rgba(0, 0, 0, 0.18)",
+    "background: #1f2937",
+    "box-shadow: 0 16px 42px rgba(15, 23, 42, 0.35)",
     "font: menu",
-    "color: #202124",
+    "color: #e5e7eb",
   ].join(";"));
 
   const dragHandle = createPanelDragHandle(doc);
   panel.appendChild(dragHandle);
   makePanelDraggable(window, panel, dragHandle);
 
-  panel.appendChild(createPanelStatus(doc, "paper-translation-popup-context-note", ""));
-
   const toolbar = doc.createElementNS(HTML_NS, "div");
-  toolbar.setAttribute("style", "display: flex; align-items: center; gap: 10px; margin: 8px 0;");
+  toolbar.setAttribute("style", "display: flex; align-items: center; gap: 10px; margin: 0 0 8px;");
 
   const translateButton = doc.createElementNS(HTML_NS, "button");
   translateButton.id = "paper-translation-popup-translate";
   translateButton.textContent = "翻译";
-  translateButton.setAttribute("style", "padding: 5px 12px;");
+  translateButton.setAttribute("style", [
+    "padding: 5px 12px",
+    "border: 1px solid #60a5fa",
+    "border-radius: 6px",
+    "background: #2563eb",
+    "color: #ffffff",
+  ].join(";"));
   translateButton.addEventListener("click", () => translateSelection(window));
   toolbar.appendChild(translateButton);
   toolbar.appendChild(createPanelStatus(doc, "paper-translation-popup-status", "请在论文中划取文字后点击翻译。"));
@@ -342,10 +346,10 @@ function createPanelDragHandle(doc) {
     "cursor: move",
     "user-select: none",
     "font-weight: 600",
-    "color: #24292f",
+    "color: #f8fafc",
     "padding: 0 0 10px",
     "margin-bottom: 10px",
-    "border-bottom: 1px solid #d0d7de",
+    "border-bottom: 1px solid #475569",
   ].join(";"));
   return handle;
 }
@@ -389,7 +393,7 @@ function makePanelDraggable(window, panel, handle) {
 function createPanelLabel(doc, value) {
   const label = doc.createElementNS(HTML_NS, "div");
   label.textContent = value;
-  label.setAttribute("style", "font-weight: 600; color: #24292f; margin-bottom: 6px;");
+  label.setAttribute("style", "font-weight: 600; color: #f8fafc; margin-bottom: 6px;");
   return label;
 }
 
@@ -401,7 +405,7 @@ function createPanelTextarea(doc, id, readonly, minHeight) {
     "width: 100%",
     "min-height: " + minHeight,
     "box-sizing: border-box",
-    "border: 1px solid #c9d1d9",
+    "border: 1px solid #94a3b8",
     "border-radius: 6px",
     "padding: 8px",
     "margin-bottom: 8px",
@@ -417,19 +421,13 @@ function createPanelStatus(doc, id, value) {
   const status = doc.createElementNS(HTML_NS, "span");
   status.id = id;
   status.textContent = value;
-  status.setAttribute("style", "color: #57606a;");
+  status.setAttribute("style", "color: #cbd5e1;");
   return status;
-}
-
-function refreshSelectionPreview(window) {
-  const data = readSelectionData(window);
-  setPanelText(window, "paper-translation-popup-context-note", formatContextStatus(data, false), false);
 }
 
 async function translateSelection(window) {
   const data = readSelectionData(window);
   setPanelValue(window, "paper-translation-popup-result", "");
-  setPanelText(window, "paper-translation-popup-context-note", formatContextStatus(data, true), false);
 
   if (!translatorAPI) {
     setPanelText(window, "paper-translation-popup-status", "翻译模块未加载，请重启 Zotero 后重试。", true);
@@ -449,7 +447,7 @@ async function translateSelection(window) {
 
   const button = window.document.getElementById("paper-translation-popup-translate");
   button.disabled = true;
-  setPanelText(window, "paper-translation-popup-status", "正在翻译...", false);
+  setPanelText(window, "paper-translation-popup-status", formatRequestWordCountStatus(data), false);
 
   try {
     const translation = await translatorAPI.translate({
@@ -482,7 +480,7 @@ function setPanelText(window, id, value, isError) {
     return;
   }
   node.textContent = value || "";
-  node.style.color = isError ? "#b42318" : "#57606a";
+  node.style.color = isError ? "#fecaca" : "#cbd5e1";
 }
 
 function formatUserFacingError(error) {
@@ -494,11 +492,25 @@ function formatUserFacingError(error) {
   return message || "请检查网络、模型名或 OpenAI access token。";
 }
 
-function formatContextStatus(selectionData, isTranslating) {
-  if (selectionData.hasContext) {
-    return "已获取上下文，将随划取内容一起发送。";
+function formatRequestWordCountStatus(selectionData) {
+  return "正在请求 API，已传输 " + countExtractedWords(selectionData) + " 个单词。";
+}
+
+function countExtractedWords({ selectedText, context }) {
+  const selected = normalizeText(selectedText);
+  const expandedContext = normalizeText(context);
+  if (!expandedContext) {
+    return countWords(selected);
   }
-  return isTranslating ? "未获取到上下文，已仅翻译划取内容。" : "未获取到上下文，翻译时将仅使用划取内容。";
+  if (!selected || expandedContext.indexOf(selected) !== -1) {
+    return countWords(expandedContext);
+  }
+  return countWords(selected) + countWords(expandedContext);
+}
+
+function countWords(text) {
+  const matches = String(text || "").match(/[A-Za-z0-9]+(?:[’'-][A-Za-z0-9]+)*/g);
+  return matches ? matches.length : 0;
 }
 
 function readSelectionData(window) {

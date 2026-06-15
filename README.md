@@ -109,6 +109,6 @@ Manual Zotero checks:
 - The settings pane saves and reloads token/model.
 - `Cmd+Shift+T` on macOS or `Ctrl+Shift+T` on Windows/Linux opens the popup.
 - Clicking 翻译 reads the current reader selection.
-- The context status shows whether nearby context was captured.
+- While requesting the API, the popup shows how many extracted words are being sent.
 - Translation works with a valid token and model.
 - Missing token, missing selection, and failed OpenAI requests show clear messages.
