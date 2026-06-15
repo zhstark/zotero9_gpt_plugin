@@ -1,114 +1,130 @@
-# Paper Translation Popup
+# ScholarMate
 
-A buildless Zotero 9.0.x plugin for translating selected paper text with the official OpenAI Chat Completions API.
+ScholarMate 是一个 Zotero 9 插件，用 OpenAI API 辅助阅读论文。当前版本聚焦“划词/划句翻译”：你在 Zotero PDF 阅读器中选中文本，打开插件面板，点击翻译后，ScholarMate 会把选中文本和可读取到的上下文一起发送给模型，并把中文译文显示在面板中。
 
-## Features
+这个插件的定位不是单纯的翻译工具，而是面向学术阅读的 AI 助手。后续可以继续扩展论文总结、术语解释、段落问答、方法对比、实验结论提取等功能。
 
-- Open a compact popup from Zotero with `Cmd+Shift+T` on macOS or `Ctrl+Shift+T` on Windows/Linux.
-- Configure an OpenAI access token and model in Zotero settings.
-- Translate selected text to Chinese.
-- Send best-effort nearby context when it can be read from the current selection.
-- Fall back to translating only the selected text when context is unavailable.
+## 解决的痛点
 
-## XPI Install
+读英文论文时，直接复制句子到网页翻译工具会打断阅读节奏。你需要在 Zotero、浏览器和翻译页面之间切换，还经常丢失论文上下文。ScholarMate 把翻译入口放进 Zotero 阅读器里，减少切换。
 
-Use the bundled `paper-translation-popup.xpi`, or rebuild it from source:
+学术句子经常依赖前后文。只翻译划取的半句话，模型容易误解代词、术语和研究对象。ScholarMate 会尽量从 PDF 文本层读取划取位置附近的上下文，把它和选中文本一起发给模型，让译文更贴近论文语境。
+
+Zotero PDF.js 文本层的选区并不总是稳定。直接读 `selection.toString()` 可能出现偏移。ScholarMate 优先走 PDF.js 的复制管线读取选中文本，再回退到普通 selection，减少“选中内容和实际发送内容不一致”的问题。
+
+## 当前功能
+
+- 在 Zotero 中通过快捷键打开浮动面板。
+- 在 Zotero 设置页配置 OpenAI access token 和模型名。
+- 翻译 Zotero PDF 阅读器中划取的文本。
+- 自动附带可读取到的上下文，帮助模型理解语境。
+- 请求 API 时显示本次从论文文本中提取并发送的英文单词数。
+- 直接显示 OpenAI 返回的错误信息，便于排查模型名、token 或网络问题。
+- 面板可以拖动，适合放在论文页面旁边阅读。
+
+## 快捷键
+
+- macOS：`Cmd+Shift+T`
+- Windows / Linux：`Ctrl+Shift+T`
+
+也可以在 Zotero 菜单中选择 Tools > 翻译划取内容。
+
+## 安装
+
+仓库中包含已经打包好的 `paper-translation-popup.xpi`。在 Zotero 中打开：
+
+```text
+Tools > Add-ons > 齿轮菜单 > Install Add-on From File
+```
+
+选择 `paper-translation-popup.xpi` 安装。替换已有版本后，需要完全退出并重新打开 Zotero。
+
+也可以从源码重新打包：
 
 ```bash
 zip -r -FS paper-translation-popup.xpi manifest.json bootstrap.js content
 ```
 
-Install it from Zotero with Tools > Add-ons > gear menu > Install Add-on From File.
+## 配置
 
-After replacing an installed XPI, fully restart Zotero so the updated bootstrap code is loaded.
-
-## Development Install on macOS
-
-1. Find your Zotero profile directory:
-
-   ```bash
-   ls "$HOME/Library/Application Support/Zotero/Profiles"
-   ```
-
-2. Create an extension proxy file named after the plugin id:
-
-   ```bash
-   mkdir -p "$HOME/Library/Application Support/Zotero/Profiles/<profile>/extensions"
-   printf '%s\n' "/Users/lobster/Documents/zotero_plugin" > "$HOME/Library/Application Support/Zotero/Profiles/<profile>/extensions/paper-translation-popup@lobster.local"
-   ```
-
-3. Start Zotero with cache purging while developing:
-
-   ```bash
-   /Applications/Zotero.app/Contents/MacOS/zotero -purgecaches -ZoteroDebugText
-   ```
-
-If Zotero does not detect the proxy file, fully quit Zotero and remove these two profile cache preferences from `prefs.js`:
-
-```text
-user_pref("extensions.lastAppBuildId", "..."); 
-user_pref("extensions.lastAppVersion", "...");
-```
-
-Then start Zotero again with `-purgecaches`.
-
-## Zotero 9 Failure Notes
-
-These are the failure causes found while installing on Zotero 9.0.4 for macOS:
-
-- Zotero 9 rejected the XPI until `manifest.json` included `applications.zotero.update_url`. The generic UI error was "it may be incompatible with this version of Zotero", but the internal AddonManager error was `Reading manifest: applications.zotero.update_url not provided`.
-- Do not leave only `browser_specific_settings.zotero`; Zotero 9 accepted the existing installed plugins' `applications.zotero` manifest shape.
-- A plugin proxy file was not reliable in this environment. Installing the packaged XPI into the Zotero profile's `extensions/` directory was the working path.
-- `window.openDialog()` with plugin XHTML produced an `about:blank` window in Zotero 9.0.4, even after chrome registration. The working implementation uses an in-window floating HTML panel created from `bootstrap.js`.
-- Zotero preference panes should be registered like a XUL fragment: use `rootURI + "content/preferences.xhtml"`, set `defaultXUL: true`, and do not start the preference fragment with XML declarations or stylesheet processing instructions. Zotero loads `scripts` before inserting the preference fragment, then dispatches `load` on the fragment root, so preference UI initialization must be triggered from the root `onload` attribute instead of `DOMContentLoaded` or `window.load`.
-- Zotero bootstrap scope may not expose global `fetch`. Do not reference `fetch` while constructing the translator sandbox; pass a request implementation at translation time and fall back to `Zotero.HTTP.request`.
-- Zotero Reader/PDF.js can consume XUL key bindings while focus is inside the reader. Keep the menu `key` binding, but also install capture-phase `keydown` listeners on the main window and nested reader frames.
-- Direct `selection.toString()` from the PDF.js text layer can be offset from the visible highlight. Prefer the PDF.js copy pipeline for selected text, then fall back to direct selection only if copy output is unavailable.
-- PDF.js selections often report a small span as `commonAncestorContainer`, so using only that node's `textContent` makes context look empty. Climb to the PDF page/text-layer container before slicing surrounding context.
-- Do not rely on `containerText.indexOf(selectedText)` for context. PDF.js copy output can normalize spaces or line breaks differently from page `textContent`; use DOM Range boundaries to read surrounding text directly.
-- A configured model name such as `gpt-5.5` can make OpenAI reject the request. Surface the real API error in the panel instead of only showing a generic translation failure.
-- Do not hard-code `temperature`. Some newer models only support the API default temperature value and reject explicit values such as `0.2`.
-- The translation panel is an in-window fixed HTML panel, not a native movable dialog. Add explicit drag handling on the panel header if users need to reposition it.
-- For HTML elements, `hidden="false"` still hides the element because `hidden` is a boolean attribute. Show the panel by removing `hidden`; hide it by adding `hidden="hidden"`.
-- Restart Zotero after replacing the XPI. Use `-purgecaches` when resource changes appear stale.
-
-## Configure
-
-Open Zotero settings and find the Paper Translation Popup pane. Set:
+打开 Zotero 设置，找到 ScholarMate 设置页，填写：
 
 - OpenAI access token
-- OpenAI model, defaulting to `gpt-4o-mini`
+- OpenAI model，默认使用 `gpt-4o-mini`
 
-The plugin calls:
+当前版本调用 OpenAI Chat Completions API：
 
 ```text
 https://api.openai.com/v1/chat/completions
 ```
 
-## Use
+## 使用
 
-1. Open a PDF or paper in Zotero.
-2. Select text in the reader.
-3. Press `Cmd+Shift+T` on macOS, press `Ctrl+Shift+T` on Windows/Linux, or choose Tools > 翻译划取内容.
-4. Click 翻译 in the popup.
+1. 在 Zotero 中打开论文 PDF。
+2. 在阅读器中划取需要翻译的词、短语或句子。
+3. 按快捷键打开 ScholarMate，或通过 Tools > 翻译划取内容打开。
+4. 点击“翻译”。
+5. 在面板中查看中文译文。
 
-The translation is displayed only in the popup and is not saved to Zotero.
+译文只显示在插件面板中，不会写入 Zotero 条目、笔记或 PDF 注释。
 
-## Checks
+## 开发安装
 
-Run the helper tests and syntax checks:
+macOS 开发时可以找到 Zotero profile 目录：
+
+```bash
+ls "$HOME/Library/Application Support/Zotero/Profiles"
+```
+
+创建插件 proxy 文件：
+
+```bash
+mkdir -p "$HOME/Library/Application Support/Zotero/Profiles/<profile>/extensions"
+printf '%s\n' "/Users/lobster/Documents/zotero_plugin" > "$HOME/Library/Application Support/Zotero/Profiles/<profile>/extensions/paper-translation-popup@lobster.local"
+```
+
+开发调试时建议用清缓存方式启动 Zotero：
+
+```bash
+/Applications/Zotero.app/Contents/MacOS/zotero -purgecaches -ZoteroDebugText
+```
+
+如果 Zotero 没有识别 proxy 文件，完全退出 Zotero，并从 `prefs.js` 中删除这两项缓存：
+
+```text
+user_pref("extensions.lastAppBuildId", "...");
+user_pref("extensions.lastAppVersion", "...");
+```
+
+然后用 `-purgecaches` 重新启动。
+
+## 检查
+
+提交前运行：
 
 ```bash
 npm test
 npm run check
+xmllint --noout content/popup.xhtml content/preferences.xhtml
+unzip -t paper-translation-popup.xpi
 ```
 
-Manual Zotero checks:
+手动检查：
 
-- Zotero recognizes the plugin.
-- The settings pane saves and reloads token/model.
-- `Cmd+Shift+T` on macOS or `Ctrl+Shift+T` on Windows/Linux opens the popup.
-- Clicking 翻译 reads the current reader selection.
-- While requesting the API, the popup shows how many extracted words are being sent.
-- Translation works with a valid token and model.
-- Missing token, missing selection, and failed OpenAI requests show clear messages.
+- Zotero 能识别 ScholarMate。
+- 设置页能保存并重新加载 token 和模型名。
+- 快捷键能打开插件面板。
+- 点击“翻译”能读取当前 PDF 选区。
+- 请求 API 时能显示发送的单词数。
+- token 缺失、未选中文本、OpenAI 请求失败时有明确提示。
+
+## Zotero 9 开发注意
+
+- Zotero 9 安装 XPI 时要求 `manifest.json` 中包含 `applications.zotero.update_url`。缺少它时，界面只会提示插件可能不兼容。
+- 只写 `browser_specific_settings.zotero` 不够；当前插件使用 `applications.zotero`。
+- 在本地环境中，proxy 文件不一定稳定。直接把打包好的 XPI 放入 profile 的 `extensions/` 目录是目前验证过的安装路径。
+- `window.openDialog()` 在 Zotero 9.0.4 中会打开 `about:blank`，所以 ScholarMate 使用 `bootstrap.js` 创建 in-window 浮动面板。
+- Zotero Reader/PDF.js 可能吞掉 XUL key binding，所以插件同时在主窗口和 reader frame 上安装 capture 阶段的 `keydown` 监听。
+- PDF.js 文本层会规范化空格和换行。读取上下文时不要只依赖 `containerText.indexOf(selectedText)`，优先用 DOM Range 边界读取前后文本。
+- 不要硬编码 `temperature`。部分新模型只接受默认 temperature，显式传 `0.2` 会被 OpenAI 拒绝。
+- 替换 XPI 后要重启 Zotero。资源看起来没更新时，用 `-purgecaches` 启动。

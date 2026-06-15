@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "name": "Paper Translation Popup",
-  "version": "0.1.12",
-  "description": "Translate selected paper text with OpenAI from a compact Zotero popup.",
+  "name": "ScholarMate",
+  "version": "0.1.13",
+  "description": "Use OpenAI from Zotero to translate and assist with academic reading.",
   "author": "lobster",
   "homepage_url": "https://github.com/zhstark/zotero9_gpt_plugin",
   "applications": {

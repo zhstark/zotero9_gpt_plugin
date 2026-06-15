@@ -1,8 +1,8 @@
 {
-  "name": "zotero-translation-popup",
-  "version": "0.1.12",
+  "name": "scholarmate-zotero",
+  "version": "0.1.13",
   "private": true,
-  "description": "A Zotero translation popup plugin for selected paper text.",
+  "description": "A Zotero plugin for OpenAI-powered academic reading assistance.",
   "scripts": {
     "test": "node --test tests/*.test.js",
     "check": "node --check bootstrap.js && node --check content/translator.js && node --check content/popup.js && node --check content/preferences.js"

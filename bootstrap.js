@@ -92,7 +92,7 @@ function registerPreferencePane() {
     src: rootURI + "content/preferences.xhtml",
     scripts: [rootURI + "content/preferences.js"],
     stylesheets: [rootURI + "content/styles.css"],
-    label: "Paper Translation Popup",
+    label: "ScholarMate",
     defaultXUL: true,
   });
 }
@@ -341,7 +341,7 @@ function getOrCreatePanel(window) {
 function createPanelDragHandle(doc) {
   const handle = doc.createElementNS(HTML_NS, "div");
   handle.id = "paper-translation-popup-drag-handle";
-  handle.textContent = "Paper Translation Popup";
+  handle.textContent = "ScholarMate";
   handle.setAttribute("style", [
     "cursor: move",
     "user-select: none",
@@ -833,6 +833,6 @@ function normalizeText(text) {
 function logError(message, error) {
   const details = error && error.stack ? error.stack : String(error || "");
   if (typeof Zotero !== "undefined" && Zotero.debug) {
-    Zotero.debug("[Paper Translation Popup] " + message + ": " + details);
+    Zotero.debug("[ScholarMate] " + message + ": " + details);
   }
 }

@@ -226,7 +226,7 @@
       const zotero = openerWindow && openerWindow.Zotero;
       const message = error && error.stack ? error.stack : String(error);
       if (zotero && typeof zotero.debug === "function") {
-        zotero.debug(`[Paper Translation Popup] ${message}`);
+        zotero.debug(`[ScholarMate] ${message}`);
       }
     } catch (_ignored) {
       // Ignore logging failures so UI error handling still completes.
