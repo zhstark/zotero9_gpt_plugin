@@ -186,6 +186,35 @@ test("builds ask payload with full conversation history without truncation", () 
   assert.equal(body.question, "继续解释实验结果");
 });
 
+test("sanitizes invalid PDF text before building ask payload", () => {
+  const context = translator.buildPaperContext([
+    {
+      pageNumber: 1,
+      text: "Valid text\u0000with hidden control\u0085and lone surrogate \uD800.",
+    },
+  ]);
+  const payload = translator.buildAskPayload({
+    model: "gpt-4o-mini",
+    mode: "ask-pdf",
+    question: "总结\u0007这篇论文",
+    paperContext: context,
+    conversationMessages: [
+      { role: "user", content: "上一轮\u0000问题" },
+      { role: "assistant", content: "上一轮回答\uD800" },
+    ],
+  });
+
+  const body = JSON.parse(payload.messages[1].content);
+  const serialized = JSON.stringify(body);
+  assert.doesNotMatch(serialized, /\\u0000|\\u0007|\\u0085|\\ud800/i);
+  assert.match(body.paper_text, /Valid text with hidden control and lone surrogate/);
+  assert.match(body.question, /总结 这篇论文/);
+  assert.deepEqual(body.conversation_history, [
+    { role: "user", content: "上一轮 问题" },
+    { role: "assistant", content: "上一轮回答" },
+  ]);
+});
+
 test("sends ask paper request through OpenAI chat completions", async () => {
   let requestOptions = null;
   const fetchImpl = async (_url, options) => {
@@ -235,4 +264,63 @@ test("renders markdown answers to safe html", () => {
   assert.match(html, /<ul><li>VUS-ROC<\/li><li>VUS-PR<\/li><\/ul>/);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>/);
+});
+
+test("renders compact markdown headings and lists with block structure", () => {
+  const html = translator.renderMarkdown("Intro --- ### 1. 方法 - **Encoder**: 提取特征 - Decoder: 输出结果");
+
+  assert.match(html, /<p>Intro<\/p>/);
+  assert.match(html, /<hr>/);
+  assert.match(html, /<h3>1\. 方法<\/h3>/);
+  assert.match(html, /<ul><li><strong>Encoder<\/strong>: 提取特征<\/li><li>Decoder: 输出结果<\/li><\/ul>/);
+});
+
+test("calculates right-side panel width from left-edge dragging", () => {
+  assert.equal(translator.calculatePanelDragWidth({
+    startWidth: 390,
+    startClientX: 900,
+    currentClientX: 760,
+    viewportWidth: 1200,
+  }), 530);
+});
+
+test("keeps dragged panel width within usable viewport bounds", () => {
+  assert.equal(translator.calculatePanelDragWidth({
+    startWidth: 390,
+    startClientX: 900,
+    currentClientX: 200,
+    viewportWidth: 640,
+  }), 616);
+
+  assert.equal(translator.calculatePanelDragWidth({
+    startWidth: 390,
+    startClientX: 900,
+    currentClientX: 980,
+    viewportWidth: 1200,
+  }), 320);
+});
+
+test("submits ask question on plain Enter only in question modes", () => {
+  assert.equal(translator.shouldSubmitQuestionKey({
+    mode: "ask-pdf",
+    key: "Enter",
+  }), true);
+  assert.equal(translator.shouldSubmitQuestionKey({
+    mode: "ask-select",
+    key: "Enter",
+  }), true);
+  assert.equal(translator.shouldSubmitQuestionKey({
+    mode: "translate",
+    key: "Enter",
+  }), false);
+  assert.equal(translator.shouldSubmitQuestionKey({
+    mode: "ask-pdf",
+    key: "Enter",
+    shiftKey: true,
+  }), false);
+  assert.equal(translator.shouldSubmitQuestionKey({
+    mode: "ask-pdf",
+    key: "Enter",
+    isComposing: true,
+  }), false);
 });

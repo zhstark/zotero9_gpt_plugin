@@ -3,8 +3,12 @@
   const DEFAULT_PAPER_CONTEXT_MAX_CHARS = 180000;
 
   let actionButton;
+  let askActionButton;
+  let toolbarNode;
   let copyButton;
   let statusNode;
+  let askStatusNode;
+  let askStatusRow;
   let resultNode;
   let markdownResultNode;
   let questionSection;
@@ -14,14 +18,19 @@
   let openerWindow;
   let prefs;
   let assistantMode = "translate";
-  let paperChatSession = { key: "", paperContext: null, messages: [] };
+  let rawResultValue = "";
+  let paperChatState = { key: "", sessions: {} };
 
   window.addEventListener("load", init);
 
   function init() {
     actionButton = document.getElementById("action-button");
+    askActionButton = document.getElementById("ask-action-button");
+    toolbarNode = document.querySelector(".toolbar");
     copyButton = document.getElementById("copy-button");
     statusNode = document.getElementById("status");
+    askStatusNode = document.getElementById("ask-status");
+    askStatusRow = document.getElementById("ask-status-row");
     resultNode = document.getElementById("translation-result");
     markdownResultNode = document.getElementById("markdown-result");
     questionSection = document.getElementById("question-section");
@@ -34,6 +43,8 @@
     prefs = ZoteroTranslationTranslator.normalizeSettings(args.prefs || readPrefsFromZotero());
 
     actionButton.addEventListener("command", runAssistantAction);
+    askActionButton.addEventListener("command", runAssistantAction);
+    questionInput.addEventListener("keydown", handleQuestionKeydown);
     copyButton.addEventListener("command", copyTranslationResult);
     clearChatButton.addEventListener("command", clearPaperChatSession);
     document.getElementById("tab-translate").addEventListener("command", () => updateAssistantMode("translate"));
@@ -75,9 +86,30 @@
     resultNode.style.display = assistantMode === "translate" ? "block" : "none";
     markdownResultNode.style.display = assistantMode === "translate" ? "none" : "block";
     questionInput.placeholder = assistantMode === "ask-select" ? "这里提到的概念是什么意思？" : "总结这篇论文";
-    actionButton.setAttribute("label", assistantMode === "translate" ? "翻译" : "提问");
+    toolbarNode.style.display = assistantMode === "translate" ? "flex" : "none";
+    askStatusRow.style.display = assistantMode === "translate" ? "none" : "flex";
+    actionButton.style.display = assistantMode === "translate" ? "flex" : "none";
+    askActionButton.style.display = assistantMode === "translate" ? "none" : "flex";
+    actionButton.setAttribute("label", "翻译");
     resultLabel.setAttribute("value", assistantMode === "translate" ? "翻译结果" : "对话");
+    renderCurrentModeResult();
     setStatus(getInitialModeStatus(assistantMode), false);
+  }
+
+  function handleQuestionKeydown(event) {
+    if (!ZoteroTranslationTranslator.shouldSubmitQuestionKey({
+      mode: assistantMode,
+      key: event.key,
+      shiftKey: event.shiftKey,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      altKey: event.altKey,
+      isComposing: event.isComposing,
+    })) {
+      return;
+    }
+    event.preventDefault();
+    runAssistantAction();
   }
 
   function getInitialModeStatus(mode) {
@@ -131,7 +163,7 @@
     }
 
     const question = readQuestion();
-    const session = getPaperChatSession();
+    const session = getPaperChatSession(assistantMode);
     const selectionData = assistantMode === "ask-select" ? readSelectionData() : { selectedText: "" };
     if (assistantMode === "ask-select" && !selectionData.selectedText && session.messages.length === 0) {
       setStatus("请先在论文阅读器中划取要提问的片段。", true);
@@ -165,7 +197,7 @@
         content: formatConversationUserMessage(question, selectionData.selectedText),
       });
       session.messages.push({ role: "assistant", content: answer });
-      setResultValue(formatConversationTranscript(session.messages));
+      renderCurrentModeResult();
       questionInput.value = "";
       setStatus("回答完成。", false);
     } catch (error) {
@@ -184,13 +216,16 @@
     return assistantMode === "ask-select" ? "请解释划取片段在论文中的含义。" : "请总结这篇论文。";
   }
 
-  function getPaperChatSession() {
+  function getPaperChatSession(mode) {
     const key = readPaperSessionKey();
-    if (paperChatSession.key === key) {
-      return paperChatSession;
+    const sessionMode = mode === "ask-select" ? "ask-select" : "ask-pdf";
+    if (paperChatState.key !== key) {
+      paperChatState = { key, sessions: {} };
     }
-    paperChatSession = { key, paperContext: null, messages: [] };
-    return paperChatSession;
+    if (!paperChatState.sessions[sessionMode]) {
+      paperChatState.sessions[sessionMode] = { key, mode: sessionMode, paperContext: null, messages: [] };
+    }
+    return paperChatState.sessions[sessionMode];
   }
 
   function readPaperSessionKey() {
@@ -198,10 +233,10 @@
   }
 
   function clearPaperChatSession() {
-    const session = getPaperChatSession();
+    const session = getPaperChatSession(assistantMode);
     session.paperContext = null;
     session.messages = [];
-    setResultValue("");
+    renderCurrentModeResult();
     setStatus(getInitialModeStatus(assistantMode), false);
   }
 
@@ -493,22 +528,50 @@
 
   function setBusy(isBusy) {
     actionButton.disabled = isBusy;
+    askActionButton.disabled = isBusy;
   }
 
   function setStatus(message, isError) {
-    statusNode.setAttribute("value", message);
-    statusNode.classList.toggle("error", Boolean(isError));
+    const activeNode = assistantMode === "translate" ? statusNode : askStatusNode;
+    const inactiveNode = assistantMode === "translate" ? askStatusNode : statusNode;
+    inactiveNode.setAttribute("value", "");
+    inactiveNode.classList.remove("error");
+    activeNode.setAttribute("value", message);
+    activeNode.classList.toggle("error", Boolean(isError));
   }
 
   function setResultValue(value) {
     const nextValue = value || "";
+    rawResultValue = nextValue;
     resultNode.value = nextValue;
-    resultNode.setAttribute("data-raw-value", nextValue);
-    markdownResultNode.innerHTML = ZoteroTranslationTranslator.renderMarkdown(nextValue);
+    try {
+      markdownResultNode.innerHTML = ZoteroTranslationTranslator.renderMarkdown(nextValue);
+    } catch (error) {
+      logError(error);
+      markdownResultNode.textContent = normalizeText(nextValue);
+    }
+  }
+
+  function renderCurrentModeResult() {
+    if (assistantMode === "translate") {
+      resultNode.value = rawResultValue;
+      markdownResultNode.textContent = "";
+      return;
+    }
+    resultNode.value = "";
+    const session = getPaperChatSession(assistantMode);
+    try {
+      markdownResultNode.innerHTML = ZoteroTranslationTranslator.renderMarkdown(formatConversationTranscript(session.messages));
+    } catch (error) {
+      logError(error);
+      markdownResultNode.textContent = normalizeText(formatConversationTranscript(session.messages));
+    }
   }
 
   async function copyTranslationResult() {
-    const value = resultNode.getAttribute("data-raw-value") || "";
+    const value = assistantMode === "translate"
+      ? rawResultValue || resultNode.value || ""
+      : formatConversationTranscript(getPaperChatSession(assistantMode).messages);
     if (!value) {
       setStatus(assistantMode === "translate" ? "暂无可复制的译文。" : "暂无可复制的对话。", true);
       return;

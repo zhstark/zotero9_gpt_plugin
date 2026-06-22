@@ -12,9 +12,13 @@ try {
 const PLUGIN_ID = "paper-translation-popup@lobster.local";
 const PREF_TOKEN = "extensions.paperTranslationPopup.openaiToken";
 const PREF_MODEL = "extensions.paperTranslationPopup.openaiModel";
+const PREF_PANEL_WIDTH = "extensions.paperTranslationPopup.panelWidth";
 const DEFAULT_MODEL = "gpt-4o-mini";
 const CONTEXT_WINDOW = 600;
 const DEFAULT_PAPER_CONTEXT_MAX_CHARS = 180000;
+const DEFAULT_PANEL_WIDTH = 390;
+const MIN_PANEL_WIDTH = 320;
+const PANEL_VIEWPORT_MARGIN = 24;
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
 var rootURI;
@@ -22,6 +26,7 @@ var chromeHandle;
 var translatorAPI;
 var pluginWindows = new Set();
 var paperChatSessions = new WeakMap();
+var panelTranslationValues = new WeakMap();
 
 function install() {}
 
@@ -316,8 +321,9 @@ function getOrCreatePanel(window) {
     "right: 0",
     "top: 48px",
     "bottom: 0",
-    "width: 390px",
-    "max-width: min(390px, calc(100vw - 24px))",
+    "width: " + readPanelWidthPreference(window) + "px",
+    "min-width: " + MIN_PANEL_WIDTH + "px",
+    "max-width: calc(100vw - " + PANEL_VIEWPORT_MARGIN + "px)",
     "z-index: 2147483647",
     "box-sizing: border-box",
     "display: none",
@@ -330,6 +336,7 @@ function getOrCreatePanel(window) {
   ].join(";"));
   panel.setAttribute("data-assistant-mode", "translate");
 
+  panel.appendChild(createPanelResizeHandle(doc, window));
   panel.appendChild(createAssistantHeader(doc));
   panel.appendChild(createAssistantTabs(doc, window));
 
@@ -345,26 +352,12 @@ function getOrCreatePanel(window) {
   ].join(";"));
 
   const toolbar = doc.createElementNS(HTML_NS, "div");
+  toolbar.id = "paper-translation-popup-toolbar";
   toolbar.setAttribute("style", "display: flex; align-items: center; gap: 10px;");
 
-  const actionButton = doc.createElementNS(HTML_NS, "button");
+  const actionButton = createPrimaryActionButton(doc);
   actionButton.id = "paper-translation-popup-action";
   actionButton.textContent = "翻译";
-  actionButton.setAttribute("style", [
-    "display: inline-flex",
-    "align-items: center",
-    "justify-content: center",
-    "min-width: 72px",
-    "height: 34px",
-    "padding: 0 14px",
-    "border: 1px solid #1d4ed8",
-    "border-radius: 7px",
-    "background: #1d4ed8",
-    "color: #ffffff",
-    "font-weight: 600",
-    "line-height: 1.2",
-    "cursor: pointer",
-  ].join(";"));
   actionButton.addEventListener("click", () => runAssistantAction(window));
   toolbar.appendChild(actionButton);
   toolbar.appendChild(createPanelStatus(doc, "paper-translation-popup-status", "请在论文中划取文字后点击翻译。"));
@@ -375,11 +368,28 @@ function getOrCreatePanel(window) {
   questionSection.setAttribute("style", [
     questionSection.getAttribute("style"),
     "display: none",
+    "flex-direction: column",
+    "gap: 8px",
   ].join(";"));
   questionSection.appendChild(createPanelLabel(doc, "问题"));
   const questionInput = createPanelTextarea(doc, "paper-translation-popup-question", false, "82px");
   questionInput.setAttribute("placeholder", "总结这篇论文");
+  questionInput.addEventListener("keydown", (event) => handleQuestionKeydown(window, event));
   questionSection.appendChild(questionInput);
+  const askActionRow = doc.createElementNS(HTML_NS, "div");
+  askActionRow.id = "paper-translation-popup-ask-status-row";
+  askActionRow.setAttribute("style", [
+    "display: none",
+    "align-items: center",
+    "gap: 10px",
+  ].join(";"));
+  const askButton = createPrimaryActionButton(doc);
+  askButton.id = "paper-translation-popup-ask-action";
+  askButton.textContent = "提问";
+  askButton.addEventListener("click", () => runAssistantAction(window));
+  askActionRow.appendChild(askButton);
+  askActionRow.appendChild(createPanelStatus(doc, "paper-translation-popup-ask-status", ""));
+  questionSection.appendChild(askActionRow);
   body.appendChild(questionSection);
 
   const resultSection = createAssistantSection(doc);
@@ -412,6 +422,144 @@ function getOrCreatePanel(window) {
   return panel;
 }
 
+function createPrimaryActionButton(doc) {
+  const button = doc.createElementNS(HTML_NS, "button");
+  button.type = "button";
+  button.setAttribute("style", [
+    "display: inline-flex",
+    "align-items: center",
+    "justify-content: center",
+    "min-width: 72px",
+    "height: 34px",
+    "padding: 0 14px",
+    "border: 1px solid #1d4ed8",
+    "border-radius: 7px",
+    "background: #1d4ed8",
+    "color: #ffffff",
+    "font-weight: 600",
+    "line-height: 1.2",
+    "cursor: pointer",
+  ].join(";"));
+  return button;
+}
+
+function createPanelResizeHandle(doc, window) {
+  const handle = doc.createElementNS(HTML_NS, "div");
+  handle.id = "paper-translation-popup-resize-handle";
+  handle.setAttribute("role", "separator");
+  handle.setAttribute("aria-orientation", "vertical");
+  handle.setAttribute("title", "拖拽调整宽度");
+  handle.setAttribute("style", [
+    "position: absolute",
+    "left: -4px",
+    "top: 0",
+    "bottom: 0",
+    "width: 8px",
+    "z-index: 1",
+    "cursor: ew-resize",
+    "touch-action: none",
+  ].join(";"));
+  handle.addEventListener("mousedown", (event) => startPanelResize(window, event));
+  return handle;
+}
+
+function startPanelResize(window, event) {
+  if (event.button !== 0) {
+    return;
+  }
+  const panel = window.document.getElementById("paper-translation-popup-panel");
+  if (!panel) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  const startWidth = panel.getBoundingClientRect().width || readPanelWidthPreference(window);
+  const startClientX = getResizeEventX(event);
+  const targets = getNestedWindows(window);
+  const root = window.document.documentElement;
+  const previousCursor = root.style.cursor;
+  const previousUserSelect = root.style.userSelect;
+  root.style.cursor = "ew-resize";
+  root.style.userSelect = "none";
+
+  const onMouseMove = (moveEvent) => {
+    moveEvent.preventDefault();
+    const nextWidth = calculatePanelDragWidth({
+      startWidth,
+      startClientX,
+      currentClientX: getResizeEventX(moveEvent),
+      viewportWidth: getViewportWidth(window),
+    });
+    applyPanelWidth(panel, nextWidth);
+  };
+  const finishResize = (finishEvent) => {
+    if (finishEvent) {
+      finishEvent.preventDefault();
+    }
+    for (const targetWindow of targets) {
+      try {
+        targetWindow.removeEventListener("mousemove", onMouseMove, true);
+        targetWindow.removeEventListener("mouseup", finishResize, true);
+      } catch (_error) {
+        // Ignore inaccessible frames during cleanup.
+      }
+    }
+    root.style.cursor = previousCursor;
+    root.style.userSelect = previousUserSelect;
+    persistPanelWidth(panel.getBoundingClientRect().width || readPanelWidthPreference(window));
+  };
+
+  for (const targetWindow of targets) {
+    try {
+      targetWindow.addEventListener("mousemove", onMouseMove, true);
+      targetWindow.addEventListener("mouseup", finishResize, true);
+    } catch (_error) {
+      // Ignore inaccessible frames.
+    }
+  }
+}
+
+function getResizeEventX(event) {
+  return Number.isFinite(event.screenX) ? event.screenX : event.clientX;
+}
+
+function applyPanelWidth(panel, width) {
+  panel.style.width = Math.round(width) + "px";
+}
+
+function readPanelWidthPreference(window) {
+  const value = Number(Zotero.Prefs.get(PREF_PANEL_WIDTH));
+  return calculatePanelDragWidth({
+    startWidth: value || DEFAULT_PANEL_WIDTH,
+    startClientX: 0,
+    currentClientX: 0,
+    viewportWidth: getViewportWidth(window),
+  });
+}
+
+function persistPanelWidth(width) {
+  Zotero.Prefs.set(PREF_PANEL_WIDTH, Math.round(width));
+}
+
+function calculatePanelDragWidth(options) {
+  const source = options || {};
+  const startWidth = Number(source.startWidth) || DEFAULT_PANEL_WIDTH;
+  const startClientX = Number(source.startClientX) || 0;
+  const currentClientX = Number(source.currentClientX) || 0;
+  const viewportWidth = Number(source.viewportWidth) || 0;
+  const maxWidth = viewportWidth > 0
+    ? Math.max(MIN_PANEL_WIDTH, viewportWidth - PANEL_VIEWPORT_MARGIN)
+    : Number.POSITIVE_INFINITY;
+  const nextWidth = startWidth + startClientX - currentClientX;
+  return Math.round(Math.min(maxWidth, Math.max(MIN_PANEL_WIDTH, nextWidth)));
+}
+
+function getViewportWidth(window) {
+  return window.innerWidth || window.document.documentElement.clientWidth || 0;
+}
+
 function installAssistantStyles(doc) {
   if (doc.getElementById("paper-translation-popup-styles")) {
     return;
@@ -430,6 +578,11 @@ function installAssistantStyles(doc) {
     "#paper-translation-popup-markdown-result code { border-radius: 5px; padding: 1px 4px; background: #f1f5f9; color: #0f172a; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }",
     "#paper-translation-popup-markdown-result pre { overflow: auto; margin: 0 0 12px; border-radius: 8px; padding: 12px; background: #0f172a; }",
     "#paper-translation-popup-markdown-result pre code { padding: 0; color: #e2e8f0; background: transparent; }",
+    "#paper-translation-popup-markdown-result .scholarmate-message { margin: 0 0 16px; }",
+    "#paper-translation-popup-markdown-result .scholarmate-speaker { margin: 0 0 6px; font-weight: 700; color: #334155; }",
+    "#paper-translation-popup-markdown-result .scholarmate-message-user .scholarmate-body { white-space: pre-wrap; color: #334155; }",
+    "#paper-translation-popup-markdown-result .scholarmate-message-assistant .scholarmate-body { color: #0f172a; }",
+    "#paper-translation-popup-markdown-result hr { margin: 14px 0; border: 0; border-top: 1px solid #e2e8f0; }",
   ].join("\n");
   const head = doc.querySelector("head");
   if (head) {
@@ -606,9 +759,14 @@ function updateAssistantMode(window, mode) {
     setAssistantTabStyle(tab, tab.getAttribute("data-assistant-tab") === nextMode);
   }
 
+  const toolbar = doc.getElementById("paper-translation-popup-toolbar");
+  if (toolbar) {
+    toolbar.style.display = nextMode === "translate" ? "flex" : "none";
+  }
+
   const questionSection = doc.getElementById("paper-translation-popup-question-section");
   if (questionSection) {
-    questionSection.style.display = nextMode === "translate" ? "none" : "block";
+    questionSection.style.display = nextMode === "translate" ? "none" : "flex";
   }
 
   const question = doc.getElementById("paper-translation-popup-question");
@@ -620,7 +778,18 @@ function updateAssistantMode(window, mode) {
 
   const actionButton = doc.getElementById("paper-translation-popup-action");
   if (actionButton) {
-    actionButton.textContent = nextMode === "translate" ? "翻译" : "提问";
+    actionButton.textContent = "翻译";
+    actionButton.style.display = nextMode === "translate" ? "inline-flex" : "none";
+  }
+
+  const askButton = doc.getElementById("paper-translation-popup-ask-action");
+  if (askButton) {
+    askButton.style.display = nextMode === "translate" ? "none" : "inline-flex";
+  }
+
+  const askStatusRow = doc.getElementById("paper-translation-popup-ask-status-row");
+  if (askStatusRow) {
+    askStatusRow.style.display = nextMode === "translate" ? "none" : "flex";
   }
 
   const resultLabel = doc.getElementById("paper-translation-popup-result-label");
@@ -642,6 +811,7 @@ function updateAssistantMode(window, mode) {
     markdownResult.style.display = nextMode === "translate" ? "none" : "block";
   }
 
+  renderCurrentModeResult(window);
   setPanelText(window, "paper-translation-popup-status", getInitialModeStatus(nextMode), false);
 }
 
@@ -649,6 +819,34 @@ function getAssistantMode(window) {
   const panel = window.document.getElementById("paper-translation-popup-panel");
   const mode = panel && panel.getAttribute("data-assistant-mode");
   return mode === "ask-pdf" || mode === "ask-select" ? mode : "translate";
+}
+
+function handleQuestionKeydown(window, event) {
+  if (!shouldSubmitQuestionKey({
+    mode: getAssistantMode(window),
+    key: event.key,
+    shiftKey: event.shiftKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    altKey: event.altKey,
+    isComposing: event.isComposing,
+  })) {
+    return;
+  }
+  event.preventDefault();
+  runAssistantAction(window);
+}
+
+function shouldSubmitQuestionKey(event) {
+  const source = event || {};
+  const mode = source.mode === "ask-pdf" || source.mode === "ask-select" ? source.mode : "translate";
+  return mode !== "translate"
+    && source.key === "Enter"
+    && !source.shiftKey
+    && !source.ctrlKey
+    && !source.metaKey
+    && !source.altKey
+    && !source.isComposing;
 }
 
 function getInitialModeStatus(mode) {
@@ -729,15 +927,15 @@ function runAssistantAction(window) {
 
 async function translateSelection(window) {
   const data = readSelectionData(window);
-  setPanelValue(window, "paper-translation-popup-result", "");
+  setTranslationResult(window, "");
 
   if (!translatorAPI) {
     setPanelText(window, "paper-translation-popup-status", "翻译模块未加载，请重启 Zotero 后重试。", true);
     return;
   }
 
-  const token = Zotero.Prefs.get(PREF_TOKEN) || "";
-  const model = Zotero.Prefs.get(PREF_MODEL) || DEFAULT_MODEL;
+  const token = String(Zotero.Prefs.get(PREF_TOKEN) || "").trim();
+  const model = String(Zotero.Prefs.get(PREF_MODEL) || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   if (!token) {
     setPanelText(window, "paper-translation-popup-status", "请先在 Zotero 设置中配置 OpenAI access token。", true);
     return;
@@ -747,8 +945,7 @@ async function translateSelection(window) {
     return;
   }
 
-  const button = window.document.getElementById("paper-translation-popup-action");
-  button.disabled = true;
+  setAssistantActionDisabled(window, true);
   setPanelText(window, "paper-translation-popup-status", formatRequestWordCountStatus(data), false);
 
   try {
@@ -759,43 +956,44 @@ async function translateSelection(window) {
       selectedText: data.selectedText,
       context: data.context,
     });
-    setPanelValue(window, "paper-translation-popup-result", translation);
+    setTranslationResult(window, translation);
     setPanelText(window, "paper-translation-popup-status", "翻译完成。", false);
   } catch (error) {
     logError("Translation failed", error);
     setPanelText(window, "paper-translation-popup-status", "翻译失败：" + formatUserFacingError(error), true);
   } finally {
-    button.disabled = false;
+    setAssistantActionDisabled(window, false);
   }
 }
 
 async function askPaperQuestion(window, mode) {
+  let failureStage = "准备问答";
   if (!translatorAPI) {
     setPanelText(window, "paper-translation-popup-status", "问答模块未加载，请重启 Zotero 后重试。", true);
     return;
   }
 
-  const token = Zotero.Prefs.get(PREF_TOKEN) || "";
-  const model = Zotero.Prefs.get(PREF_MODEL) || DEFAULT_MODEL;
+  const token = String(Zotero.Prefs.get(PREF_TOKEN) || "").trim();
+  const model = String(Zotero.Prefs.get(PREF_MODEL) || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   if (!token) {
     setPanelText(window, "paper-translation-popup-status", "请先在 Zotero 设置中配置 OpenAI access token。", true);
     return;
   }
 
   const question = readQuestion(window, mode);
-  const session = getPaperChatSession(window);
+  const session = getPaperChatSession(window, mode);
   const selectionData = mode === "ask-select" ? readSelectionData(window) : { selectedText: "" };
   if (mode === "ask-select" && !selectionData.selectedText && session.messages.length === 0) {
     setPanelText(window, "paper-translation-popup-status", "请先在论文阅读器中划取要提问的片段。", true);
     return;
   }
 
-  const button = window.document.getElementById("paper-translation-popup-action");
-  button.disabled = true;
+  setAssistantActionDisabled(window, true);
   setPanelText(window, "paper-translation-popup-status", session.paperContext ? "正在请求 API，沿用已提取的 PDF 全文。" : "正在提取 PDF 全文...", false);
 
   try {
     if (!session.paperContext) {
+      failureStage = "提取 PDF 全文";
       session.paperContext = readPaperContext(window);
     }
     if (!session.paperContext.text) {
@@ -804,6 +1002,7 @@ async function askPaperQuestion(window, mode) {
     }
 
     setPanelText(window, "paper-translation-popup-status", formatPaperContextStatus(session.paperContext, session.messages.length > 0), false);
+    failureStage = "发送问答请求";
     const answer = await translatorAPI.askPaper({
       fetchImpl: createFetchImpl(),
       token,
@@ -814,31 +1013,44 @@ async function askPaperQuestion(window, mode) {
       selectedText: selectionData.selectedText,
       conversationMessages: session.messages,
     });
+    failureStage = "渲染回答";
     session.messages.push({
       role: "user",
       content: formatConversationUserMessage(question, selectionData.selectedText),
     });
-    session.messages.push({ role: "assistant", content: answer });
-    setPanelValue(window, "paper-translation-popup-result", formatConversationTranscript(session.messages));
+    session.messages.push({ role: "assistant", content: sanitizeTransportText(answer).trim() });
+    renderCurrentModeResult(window);
     clearQuestion(window);
     setPanelText(window, "paper-translation-popup-status", "回答完成。", false);
   } catch (error) {
     logError("Paper question failed", error);
-    setPanelText(window, "paper-translation-popup-status", "问答失败：" + formatUserFacingError(error), true);
+    setPanelText(window, "paper-translation-popup-status", "问答失败（" + failureStage + "）：" + formatUserFacingError(error), true);
   } finally {
-    button.disabled = false;
+    setAssistantActionDisabled(window, false);
   }
 }
 
-function getPaperChatSession(window) {
-  const key = readPaperSessionKey(window);
-  const existing = paperChatSessions.get(window);
-  if (existing && existing.key === key) {
-    return existing;
+function setAssistantActionDisabled(window, disabled) {
+  for (const id of ["paper-translation-popup-action", "paper-translation-popup-ask-action"]) {
+    const button = window.document.getElementById(id);
+    if (button) {
+      button.disabled = disabled;
+    }
   }
-  const session = { key, paperContext: null, messages: [] };
-  paperChatSessions.set(window, session);
-  return session;
+}
+
+function getPaperChatSession(window, mode) {
+  const key = readPaperSessionKey(window);
+  const sessionMode = mode === "ask-select" ? "ask-select" : "ask-pdf";
+  let state = paperChatSessions.get(window);
+  if (!state || state.key !== key) {
+    state = { key, sessions: {} };
+    paperChatSessions.set(window, state);
+  }
+  if (!state.sessions[sessionMode]) {
+    state.sessions[sessionMode] = { key, mode: sessionMode, paperContext: null, messages: [] };
+  }
+  return state.sessions[sessionMode];
 }
 
 function readPaperSessionKey(window) {
@@ -846,10 +1058,11 @@ function readPaperSessionKey(window) {
 }
 
 function clearPaperChatSession(window) {
-  const session = getPaperChatSession(window);
+  const mode = getAssistantMode(window);
+  const session = getPaperChatSession(window, mode);
   session.paperContext = null;
   session.messages = [];
-  setPanelValue(window, "paper-translation-popup-result", "");
+  renderCurrentModeResult(window);
   setPanelText(window, "paper-translation-popup-status", getInitialModeStatus(getAssistantMode(window)), false);
 }
 
@@ -892,11 +1105,38 @@ function setPanelValue(window, id, value) {
   const nextValue = value || "";
   if (node) {
     node.value = nextValue;
-    node.setAttribute("data-raw-value", nextValue);
   }
   if (id === "paper-translation-popup-result") {
-    renderResultMarkdown(window, nextValue);
+    if (getAssistantMode(window) === "translate" || !nextValue) {
+      renderResultMarkdown(window, nextValue);
+    }
   }
+}
+
+function setTranslationResult(window, value) {
+  const nextValue = value || "";
+  panelTranslationValues.set(window, nextValue);
+  if (getAssistantMode(window) === "translate") {
+    setPanelValue(window, "paper-translation-popup-result", nextValue);
+  }
+}
+
+function renderCurrentModeResult(window) {
+  const mode = getAssistantMode(window);
+  const resultNode = window.document.getElementById("paper-translation-popup-result");
+  if (mode === "translate") {
+    const value = panelTranslationValues.get(window) || "";
+    if (resultNode) {
+      resultNode.value = value;
+    }
+    renderResultMarkdown(window, "");
+    return;
+  }
+
+  if (resultNode) {
+    resultNode.value = "";
+  }
+  renderConversationMessages(window, getPaperChatSession(window, mode).messages);
 }
 
 function renderResultMarkdown(window, markdown) {
@@ -904,11 +1144,55 @@ function renderResultMarkdown(window, markdown) {
   if (!node) {
     return;
   }
-  node.innerHTML = renderMarkdown(markdown);
+  try {
+    renderMarkdownIntoNode(window.document, node, markdown);
+  } catch (error) {
+    logError("Markdown render failed", error);
+    node.textContent = sanitizeTransportText(markdown);
+  }
+}
+
+function renderConversationMessages(window, messages) {
+  const node = window.document.getElementById("paper-translation-popup-markdown-result");
+  if (!node) {
+    return;
+  }
+  clearNode(node);
+  for (const message of messages) {
+    const role = message && message.role === "assistant" ? "assistant" : "user";
+    const container = window.document.createElementNS(HTML_NS, "div");
+    container.className = "scholarmate-message scholarmate-message-" + role;
+
+    const speaker = window.document.createElementNS(HTML_NS, "div");
+    speaker.className = "scholarmate-speaker";
+    speaker.textContent = role === "assistant" ? "ScholarMate" : "你";
+    container.appendChild(speaker);
+
+    const body = window.document.createElementNS(HTML_NS, "div");
+    body.className = "scholarmate-body";
+    if (role === "assistant") {
+      appendMarkdownBlocks(window.document, body, message.content || "");
+    } else {
+      body.textContent = sanitizeTransportText(message.content || "");
+    }
+    container.appendChild(body);
+    node.appendChild(container);
+  }
+}
+
+function renderMarkdownIntoNode(doc, node, markdown) {
+  clearNode(node);
+  appendMarkdownBlocks(doc, node, markdown);
+}
+
+function clearNode(node) {
+  while (node.firstChild) {
+    node.removeChild(node.firstChild);
+  }
 }
 
 function setPanelText(window, id, value, isError) {
-  const node = window.document.getElementById(id);
+  const node = getPanelTextNode(window, id);
   if (!node) {
     return;
   }
@@ -916,9 +1200,27 @@ function setPanelText(window, id, value, isError) {
   node.style.color = isError ? "#b91c1c" : "#475569";
 }
 
+function getPanelTextNode(window, id) {
+  if (id !== "paper-translation-popup-status") {
+    return window.document.getElementById(id);
+  }
+  const mode = getAssistantMode(window);
+  const activeId = mode === "translate" ? "paper-translation-popup-status" : "paper-translation-popup-ask-status";
+  const inactiveId = mode === "translate" ? "paper-translation-popup-ask-status" : "paper-translation-popup-status";
+  const inactive = window.document.getElementById(inactiveId);
+  if (inactive) {
+    inactive.textContent = "";
+    inactive.style.color = "#475569";
+  }
+  return window.document.getElementById(activeId);
+}
+
 async function copyTranslationResult(window) {
   const node = window.document.getElementById("paper-translation-popup-result");
-  const value = node && node.getAttribute("data-raw-value") ? node.getAttribute("data-raw-value") : "";
+  const mode = getAssistantMode(window);
+  const value = mode === "translate"
+    ? panelTranslationValues.get(window) || (node && node.value ? node.value : "")
+    : formatConversationTranscript(getPaperChatSession(window, mode).messages);
   if (!value) {
     setPanelText(window, "paper-translation-popup-status", getAssistantMode(window) === "translate" ? "暂无可复制的译文。" : "暂无可复制的对话。", true);
     return;
@@ -940,7 +1242,7 @@ async function copyTranslationResult(window) {
 }
 
 function renderMarkdown(markdown) {
-  const normalized = String(markdown || "").replace(/\r\n/g, "\n");
+  const normalized = normalizeMarkdownForRendering(markdown);
   const blocks = normalized.split(/\n{2,}/g);
   const html = [];
 
@@ -951,6 +1253,11 @@ function renderMarkdown(markdown) {
 
     if (/^```/.test(block.trim())) {
       html.push(renderCodeBlock(block));
+      continue;
+    }
+
+    if (/^-{3,}$/.test(block.trim())) {
+      html.push("<hr>");
       continue;
     }
 
@@ -965,9 +1272,13 @@ function renderMarkdown(markdown) {
       continue;
     }
 
-    if (/^#{1,4}\s+/.test(block)) {
-      const level = Math.min(4, block.match(/^#+/)[0].length);
-      html.push("<h" + level + ">" + renderInlineMarkdown(block.replace(/^#{1,4}\s+/, "")) + "</h" + level + ">");
+    if (/^#{1,4}\s+/.test(lines[0] || "")) {
+      const headingLine = lines[0];
+      const level = Math.min(4, headingLine.match(/^#+/)[0].length);
+      html.push("<h" + level + ">" + renderInlineMarkdown(headingLine.replace(/^#{1,4}\s+/, "")) + "</h" + level + ">");
+      if (lines.length > 1) {
+        html.push(renderMarkdown(lines.slice(1).join("\n")));
+      }
       continue;
     }
 
@@ -975,6 +1286,131 @@ function renderMarkdown(markdown) {
   }
 
   return html.join("");
+}
+
+function appendMarkdownBlocks(doc, root, markdown) {
+  const normalized = normalizeMarkdownForRendering(markdown);
+  const blocks = normalized.split(/\n{2,}/g);
+  for (const block of blocks) {
+    if (!block.trim()) {
+      continue;
+    }
+
+    if (/^```/.test(block.trim())) {
+      root.appendChild(createCodeBlockNode(doc, block));
+      continue;
+    }
+
+    if (/^-{3,}$/.test(block.trim())) {
+      root.appendChild(doc.createElementNS(HTML_NS, "hr"));
+      continue;
+    }
+
+    const lines = block.split("\n");
+    if (lines.every((line) => /^\s*[-*]\s+/.test(line))) {
+      const list = doc.createElementNS(HTML_NS, "ul");
+      for (const line of lines) {
+        const item = doc.createElementNS(HTML_NS, "li");
+        appendInlineMarkdown(doc, item, line.replace(/^\s*[-*]\s+/, ""));
+        list.appendChild(item);
+      }
+      root.appendChild(list);
+      continue;
+    }
+
+    if (lines.every((line) => /^\s*\d+\.\s+/.test(line))) {
+      const list = doc.createElementNS(HTML_NS, "ol");
+      for (const line of lines) {
+        const item = doc.createElementNS(HTML_NS, "li");
+        appendInlineMarkdown(doc, item, line.replace(/^\s*\d+\.\s+/, ""));
+        list.appendChild(item);
+      }
+      root.appendChild(list);
+      continue;
+    }
+
+    if (/^#{1,4}\s+/.test(lines[0] || "")) {
+      const headingLine = lines[0];
+      const level = Math.min(4, headingLine.match(/^#+/)[0].length);
+      const heading = doc.createElementNS(HTML_NS, "h" + level);
+      appendInlineMarkdown(doc, heading, headingLine.replace(/^#{1,4}\s+/, ""));
+      root.appendChild(heading);
+      if (lines.length > 1) {
+        appendMarkdownBlocks(doc, root, lines.slice(1).join("\n"));
+      }
+      continue;
+    }
+
+    const paragraph = doc.createElementNS(HTML_NS, "p");
+    appendParagraphLines(doc, paragraph, block);
+    root.appendChild(paragraph);
+  }
+}
+
+function appendParagraphLines(doc, node, block) {
+  const lines = block.split("\n");
+  lines.forEach((line, index) => {
+    if (index > 0) {
+      node.appendChild(doc.createElementNS(HTML_NS, "br"));
+    }
+    appendInlineMarkdown(doc, node, line);
+  });
+}
+
+function appendInlineMarkdown(doc, node, text) {
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  let cursor = 0;
+  const source = sanitizeTransportText(text);
+  let match = pattern.exec(source);
+  while (match) {
+    if (match.index > cursor) {
+      node.appendChild(doc.createTextNode(source.slice(cursor, match.index)));
+    }
+    const token = match[0];
+    if (token.startsWith("`")) {
+      const code = doc.createElementNS(HTML_NS, "code");
+      code.textContent = token.slice(1, -1);
+      node.appendChild(code);
+    } else if (token.startsWith("**")) {
+      const strong = doc.createElementNS(HTML_NS, "strong");
+      strong.textContent = token.slice(2, -2);
+      node.appendChild(strong);
+    } else {
+      const emphasis = doc.createElementNS(HTML_NS, "em");
+      emphasis.textContent = token.slice(1, -1);
+      node.appendChild(emphasis);
+    }
+    cursor = match.index + token.length;
+    match = pattern.exec(source);
+  }
+  if (cursor < source.length) {
+    node.appendChild(doc.createTextNode(source.slice(cursor)));
+  }
+}
+
+function createCodeBlockNode(doc, block) {
+  const lines = block.split("\n");
+  const firstLine = lines[0] || "";
+  const lastLine = lines[lines.length - 1] || "";
+  const hasClosingFence = /^```/.test(lastLine.trim()) && lines.length > 1;
+  const codeLines = lines.slice(1, hasClosingFence ? -1 : undefined);
+  const language = firstLine.replace(/^```/, "").trim();
+  const pre = doc.createElementNS(HTML_NS, "pre");
+  const code = doc.createElementNS(HTML_NS, "code");
+  if (language) {
+    code.className = "language-" + sanitizeTransportText(language);
+  }
+  code.textContent = sanitizeTransportText(codeLines.join("\n"));
+  pre.appendChild(code);
+  return pre;
+}
+
+function normalizeMarkdownForRendering(markdown) {
+  return sanitizeTransportText(markdown)
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+-{3,}[ \t]+/g, "\n\n---\n\n")
+    .replace(/[ \t]+(#{1,4}\s+)/g, "\n\n$1")
+    .replace(/[ \t]+([-*]\s+)/g, "\n$1");
 }
 
 function renderCodeBlock(block) {
@@ -1173,7 +1609,7 @@ function buildPaperContext(pages, options) {
   const truncated = originalCharCount > maxChars;
 
   return {
-    text: truncated ? text.slice(0, maxChars) : text,
+    text: truncated ? sanitizeTransportText(text.slice(0, maxChars)) : sanitizeTransportText(text),
     pageCount: normalizedPages.length,
     removedMarginLineCount,
     originalCharCount,
@@ -1224,7 +1660,7 @@ function normalizeMarginSignature(line) {
 }
 
 function normalizeLine(line) {
-  return String(line || "")
+  return sanitizeTransportText(line)
     .replace(/\u00a0/g, " ")
     .replace(/[ \t]+/g, " ")
     .trim();
@@ -1581,12 +2017,12 @@ function buildAskPayload({ model, mode, question, paperContext, selectedText, co
             instruction: normalizedMode === "ask-select"
               ? "优先解释 selected_excerpt，并使用 paper_text 作为全文上下文。"
               : "使用 paper_text 回答 question。",
-            question: normalizedQuestion,
+            question: sanitizeTransportText(normalizedQuestion),
             paper_page_count: Number(paper.pageCount) || 0,
             paper_text_truncated: Boolean(paper.truncated),
-            selected_excerpt: normalizedMode === "ask-select" ? String(selectedText || "").trim() : "",
+            selected_excerpt: normalizedMode === "ask-select" ? sanitizeTransportText(String(selectedText || "").trim()) : "",
             conversation_history: normalizeConversationMessages(conversationMessages),
-            paper_text: String(paper.text || ""),
+            paper_text: sanitizeTransportText(String(paper.text || "")),
           },
           null,
           2
@@ -1603,19 +2039,45 @@ function normalizeConversationMessages(messages) {
   return messages
     .map((message) => ({
       role: message && message.role === "assistant" ? "assistant" : "user",
-      content: String(message && message.content ? message.content : "").trim(),
+      content: sanitizeTransportText(String(message && message.content ? message.content : "")).trim(),
     }))
     .filter((message) => message.content);
 }
 
 function createFetchImpl() {
   if (typeof fetch === "function") {
-    return fetch;
+    return fetchWithEncodedJsonBody;
   }
   if (Zotero.HTTP && typeof Zotero.HTTP.request === "function") {
     return zoteroHTTPFetch;
   }
   throw new Error("No HTTP request implementation is available");
+}
+
+async function fetchWithEncodedJsonBody(url, options) {
+  const requestOptions = options || {};
+  const nextOptions = Object.assign({}, requestOptions);
+  if (typeof requestOptions.body === "string" && isJsonRequest(requestOptions.headers)) {
+    nextOptions.body = encodeUtf8RequestBody(requestOptions.body);
+  }
+  return fetch(url, nextOptions);
+}
+
+function isJsonRequest(headers) {
+  if (!headers) {
+    return false;
+  }
+  const contentType = typeof headers.get === "function"
+    ? headers.get("Content-Type")
+    : headers["Content-Type"] || headers["content-type"];
+  return /application\/json/i.test(String(contentType || ""));
+}
+
+function encodeUtf8RequestBody(body) {
+  if (typeof TextEncoder === "function") {
+    return new TextEncoder().encode(body);
+  }
+  return body;
 }
 
 async function zoteroHTTPFetch(url, options) {
@@ -1640,7 +2102,33 @@ async function zoteroHTTPFetch(url, options) {
 }
 
 function normalizeText(text) {
-  return String(text || "").replace(/\s+/g, " ").trim();
+  return sanitizeTransportText(text).replace(/\s+/g, " ").trim();
+}
+
+function sanitizeTransportText(text) {
+  const source = String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, " ");
+  let sanitized = "";
+  for (let index = 0; index < source.length; index++) {
+    const code = source.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = source.charCodeAt(index + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        sanitized += source[index] + source[index + 1];
+        index += 1;
+      } else {
+        sanitized += " ";
+      }
+      continue;
+    }
+    if (code >= 0xDC00 && code <= 0xDFFF) {
+      sanitized += " ";
+      continue;
+    }
+    sanitized += source[index];
+  }
+  return sanitized;
 }
 
 function logError(message, error) {

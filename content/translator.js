@@ -9,6 +9,9 @@
   const DEFAULT_MODEL = "gpt-4o-mini";
   const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
   const DEFAULT_PAPER_CONTEXT_MAX_CHARS = 180000;
+  const DEFAULT_PANEL_WIDTH = 390;
+  const MIN_PANEL_WIDTH = 320;
+  const PANEL_VIEWPORT_MARGIN = 24;
 
   function normalizeSettings(settings) {
     const source = settings || {};
@@ -136,7 +139,7 @@
   }
 
   function normalizeLine(line) {
-    return String(line || "")
+    return sanitizeTransportText(line)
       .replace(/\u00a0/g, " ")
       .replace(/[ \t]+/g, " ")
       .trim();
@@ -157,12 +160,12 @@
       instruction: normalizedMode === "ask-select"
         ? "优先解释 selected_excerpt，并使用 paper_text 作为全文上下文。"
         : "使用 paper_text 回答 question。",
-      question: normalizedQuestion,
+      question: sanitizeTransportText(normalizedQuestion),
       paper_page_count: Number(paper.pageCount) || 0,
       paper_text_truncated: Boolean(paper.truncated),
-      selected_excerpt: normalizedMode === "ask-select" ? String(selectedText || "").trim() : "",
+      selected_excerpt: normalizedMode === "ask-select" ? sanitizeTransportText(String(selectedText || "").trim()) : "",
       conversation_history: normalizeConversationMessages(conversationMessages),
-      paper_text: String(paper.text || ""),
+      paper_text: sanitizeTransportText(String(paper.text || "")),
     };
 
     return {
@@ -188,7 +191,7 @@
     return messages
       .map((message) => ({
         role: message && message.role === "assistant" ? "assistant" : "user",
-        content: String(message && message.content ? message.content : "").trim(),
+        content: sanitizeTransportText(String(message && message.content ? message.content : "")).trim(),
       }))
       .filter((message) => message.content);
   }
@@ -211,7 +214,7 @@
   }
 
   function normalizeText(text) {
-    return String(text || "").replace(/\s+/g, " ").trim();
+    return sanitizeTransportText(text).replace(/\s+/g, " ").trim();
   }
 
   async function translate({ fetchImpl, token, model, selectedText, context }) {
@@ -253,7 +256,7 @@
   }
 
   function renderMarkdown(markdown) {
-    const normalized = String(markdown || "").replace(/\r\n/g, "\n");
+    const normalized = normalizeMarkdownForRendering(markdown);
     const blocks = normalized.split(/\n{2,}/g);
     const html = [];
 
@@ -264,6 +267,11 @@
 
       if (/^```/.test(block.trim())) {
         html.push(renderCodeBlock(block));
+        continue;
+      }
+
+      if (/^-{3,}$/.test(block.trim())) {
+        html.push("<hr>");
         continue;
       }
 
@@ -278,9 +286,13 @@
         continue;
       }
 
-      if (/^#{1,4}\s+/.test(block)) {
-        const level = Math.min(4, block.match(/^#+/)[0].length);
-        html.push("<h" + level + ">" + renderInlineMarkdown(block.replace(/^#{1,4}\s+/, "")) + "</h" + level + ">");
+      if (/^#{1,4}\s+/.test(lines[0] || "")) {
+        const headingLine = lines[0];
+        const level = Math.min(4, headingLine.match(/^#+/)[0].length);
+        html.push("<h" + level + ">" + renderInlineMarkdown(headingLine.replace(/^#{1,4}\s+/, "")) + "</h" + level + ">");
+        if (lines.length > 1) {
+          html.push(renderMarkdown(lines.slice(1).join("\n")));
+        }
         continue;
       }
 
@@ -288,6 +300,65 @@
     }
 
     return html.join("");
+  }
+
+  function normalizeMarkdownForRendering(markdown) {
+    return sanitizeTransportText(markdown)
+      .replace(/\r\n/g, "\n")
+      .replace(/[ \t]+-{3,}[ \t]+/g, "\n\n---\n\n")
+      .replace(/[ \t]+(#{1,4}\s+)/g, "\n\n$1")
+      .replace(/[ \t]+([-*]\s+)/g, "\n$1");
+  }
+
+  function calculatePanelDragWidth(options) {
+    const source = options || {};
+    const startWidth = Number(source.startWidth) || DEFAULT_PANEL_WIDTH;
+    const startClientX = Number(source.startClientX) || 0;
+    const currentClientX = Number(source.currentClientX) || 0;
+    const viewportWidth = Number(source.viewportWidth) || 0;
+    const maxWidth = viewportWidth > 0
+      ? Math.max(MIN_PANEL_WIDTH, viewportWidth - PANEL_VIEWPORT_MARGIN)
+      : Number.POSITIVE_INFINITY;
+    const nextWidth = startWidth + startClientX - currentClientX;
+    return Math.round(Math.min(maxWidth, Math.max(MIN_PANEL_WIDTH, nextWidth)));
+  }
+
+  function shouldSubmitQuestionKey(event) {
+    const source = event || {};
+    const mode = source.mode === "ask-pdf" || source.mode === "ask-select" ? source.mode : "translate";
+    return mode !== "translate"
+      && source.key === "Enter"
+      && !source.shiftKey
+      && !source.ctrlKey
+      && !source.metaKey
+      && !source.altKey
+      && !source.isComposing;
+  }
+
+  function sanitizeTransportText(text) {
+    const source = String(text || "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, " ");
+    let sanitized = "";
+    for (let index = 0; index < source.length; index++) {
+      const code = source.charCodeAt(index);
+      if (code >= 0xD800 && code <= 0xDBFF) {
+        const next = source.charCodeAt(index + 1);
+        if (next >= 0xDC00 && next <= 0xDFFF) {
+          sanitized += source[index] + source[index + 1];
+          index += 1;
+        } else {
+          sanitized += " ";
+        }
+        continue;
+      }
+      if (code >= 0xDC00 && code <= 0xDFFF) {
+        sanitized += " ";
+        continue;
+      }
+      sanitized += source[index];
+    }
+    return sanitized;
   }
 
   function renderCodeBlock(block) {
@@ -338,5 +409,7 @@
     translate,
     askPaper,
     renderMarkdown,
+    calculatePanelDragWidth,
+    shouldSubmitQuestionKey,
   };
 });
