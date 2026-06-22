@@ -13,12 +13,39 @@
   <script src="popup.js" />
 
   <vbox class="popup-root">
+    <hbox class="assistant-header">
+      <vbox flex="1">
+        <label class="assistant-title" value="ScholarMate" />
+        <label class="assistant-subtitle" value="阅读助手" />
+      </vbox>
+    </hbox>
+
+    <hbox class="assistant-tabs">
+      <button id="tab-translate" class="assistant-tab active" label="翻译" />
+      <button id="tab-ask-pdf" class="assistant-tab" label="问全文" />
+      <button id="tab-ask-select" class="assistant-tab" label="问选区" />
+    </hbox>
+
     <hbox class="toolbar">
-      <button id="translate-button" label="翻译" />
+      <button id="action-button" label="翻译" />
       <label id="status" class="status" value="请在论文中划取文字后点击翻译。" />
     </hbox>
 
-    <label class="section-label" value="翻译结果" />
-    <html:textarea id="translation-result" class="text-box result" readonly="readonly" />
+    <vbox id="question-section" class="assistant-section question-section">
+      <label class="section-label" value="问题" />
+      <html:textarea id="question-input" class="text-box question" placeholder="总结这篇论文" />
+    </vbox>
+
+    <vbox class="assistant-section">
+      <hbox class="section-header">
+        <label id="result-label" class="section-label" value="翻译结果" />
+        <hbox class="result-actions">
+          <button id="clear-chat-button" class="secondary-button clear-chat-button" label="清空" />
+          <button id="copy-button" class="secondary-button" label="复制" />
+        </hbox>
+      </hbox>
+      <html:textarea id="translation-result" class="text-box result" readonly="readonly" />
+      <html:div id="markdown-result" class="markdown-result" />
+    </vbox>
   </vbox>
 </window>
