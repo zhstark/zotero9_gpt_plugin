@@ -1,11 +1,11 @@
 /* exported ZoteroTranslationTranslator */
 (function (root, factory) {
-  const api = factory();
+  const api = factory(root);
   if (typeof module === "object" && module.exports) {
     module.exports = api;
   }
   root.ZoteroTranslationTranslator = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (root) {
   const DEFAULT_MODEL = "gpt-4o-mini";
   const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
   const DEFAULT_PAPER_CONTEXT_MAX_CHARS = 180000;
@@ -275,6 +275,12 @@
         continue;
       }
 
+      const displayMath = parseDisplayMathBlock(block);
+      if (displayMath) {
+        html.push(renderMathHtml(displayMath, true));
+        continue;
+      }
+
       const lines = block.split("\n");
       if (lines.every((line) => /^\s*[-*]\s+/.test(line))) {
         html.push("<ul>" + lines.map((line) => "<li>" + renderInlineMarkdown(line.replace(/^\s*[-*]\s+/, "")) + "</li>").join("") + "</ul>");
@@ -303,11 +309,24 @@
   }
 
   function normalizeMarkdownForRendering(markdown) {
+    const displayMathBlocks = [];
     return sanitizeTransportText(markdown)
       .replace(/\r\n/g, "\n")
+      .replace(/\$\$\s*([\s\S]*?)\s*\$\$/g, (_match, formula) => stashDisplayMathBlock(displayMathBlocks, formula))
+      .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_match, formula) => stashDisplayMathBlock(displayMathBlocks, formula))
       .replace(/[ \t]+-{3,}[ \t]+/g, "\n\n---\n\n")
       .replace(/[ \t]+(#{1,4}\s+)/g, "\n\n$1")
-      .replace(/[ \t]+([-*]\s+)/g, "\n$1");
+      .replace(/[ \t]+([-*]\s+)/g, "\n$1")
+      .replace(/\u0000MATHBLOCK(\d+)\u0000/g, (_match, index) => {
+        const formula = displayMathBlocks[Number(index)] || "";
+        return "\n\n\\[\n" + formula.trim() + "\n\\]\n\n";
+      });
+  }
+
+  function stashDisplayMathBlock(blocks, formula) {
+    const index = blocks.length;
+    blocks.push(String(formula || ""));
+    return "\n\n\u0000MATHBLOCK" + index + "\u0000\n\n";
   }
 
   function calculatePanelDragWidth(options) {
@@ -374,9 +393,16 @@
 
   function renderInlineMarkdown(text) {
     const codeSpans = [];
+    const mathSpans = [];
     let html = escapeHtml(text).replace(/`([^`]+)`/g, (_match, code) => {
       const token = "\u0000CODE" + codeSpans.length + "\u0000";
       codeSpans.push("<code>" + code + "</code>");
+      return token;
+    });
+
+    html = html.replace(/\\\((.+?)\\\)|\$(?!\$)([^$]+?)\$/g, (_match, parenMath, dollarMath) => {
+      const token = "\u0000MATH" + mathSpans.length + "\u0000";
+      mathSpans.push(renderMathHtml(unescapeHtml(parenMath || dollarMath || ""), false));
       return token;
     });
 
@@ -384,7 +410,41 @@
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\*([^*]+)\*/g, "<em>$1</em>");
 
-    return html.replace(/\u0000CODE(\d+)\u0000/g, (_match, index) => codeSpans[Number(index)] || "");
+    return html
+      .replace(/\u0000MATH(\d+)\u0000/g, (_match, index) => mathSpans[Number(index)] || "")
+      .replace(/\u0000CODE(\d+)\u0000/g, (_match, index) => codeSpans[Number(index)] || "");
+  }
+
+  function parseDisplayMathBlock(block) {
+    const trimmed = String(block || "").trim();
+    const bracketMatch = trimmed.match(/^\\\[\s*([\s\S]*?)\s*\\\]$/);
+    if (bracketMatch) {
+      return bracketMatch[1].trim();
+    }
+    const dollarMatch = trimmed.match(/^\$\$\s*([\s\S]*?)\s*\$\$$/);
+    if (dollarMatch) {
+      return dollarMatch[1].trim();
+    }
+    return "";
+  }
+
+  function renderMathHtml(source, displayMode) {
+    const formula = String(source || "").trim();
+    const className = "scholarmate-math " + (displayMode ? "scholarmate-math-display" : "scholarmate-math-inline");
+    if (root && root.katex && typeof root.katex.renderToString === "function") {
+      try {
+        return root.katex.renderToString(formula, {
+          displayMode,
+          throwOnError: false,
+          strict: "ignore",
+          output: "html",
+        }).replace(/^<span class="katex/, "<span class=\"" + className + " katex");
+      } catch (_error) {
+        // Fall back to readable source text below.
+      }
+    }
+    const tag = displayMode ? "div" : "span";
+    return "<" + tag + " class=\"" + className + "\">" + escapeHtml(formula) + "</" + tag + ">";
   }
 
   function escapeHtml(value) {
@@ -394,6 +454,15 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  }
+
+  function unescapeHtml(value) {
+    return String(value || "")
+      .replace(/&quot;/g, "\"")
+      .replace(/&#39;/g, "'")
+      .replace(/&gt;/g, ">")
+      .replace(/&lt;/g, "<")
+      .replace(/&amp;/g, "&");
   }
 
   return {

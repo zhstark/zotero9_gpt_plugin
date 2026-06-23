@@ -266,6 +266,30 @@ test("renders markdown answers to safe html", () => {
   assert.doesNotMatch(html, /<script>/);
 });
 
+test("renders inline and display latex formulas in markdown html", () => {
+  const html = translator.renderMarkdown([
+    "用预测器 \\(h\\) 做预测。",
+    "",
+    "\\[",
+    "S_t = |Y_t - \\hat Y_t|",
+    "\\]",
+  ].join("\n"));
+
+  assert.match(html, /class="[^"]*scholarmate-math-inline/);
+  assert.match(html, /class="[^"]*scholarmate-math-display/);
+  assert.match(html, /Y_t/);
+  assert.match(html, /Y_t - \\hat Y_t/);
+  assert.match(html, /\\hat Y_t/);
+});
+
+test("renders single-line dollar display latex formulas", () => {
+  const html = translator.renderMarkdown("$$\\bar \\varpi_{t+1} = \\mathrm{median}_{d \\in [D]} \\varpi_{t+1}^d$$");
+
+  assert.match(html, /class="[^"]*scholarmate-math-display/);
+  assert.match(html, /\\bar \\varpi/);
+  assert.doesNotMatch(html, /<p>\$/);
+});
+
 test("renders compact markdown headings and lists with block structure", () => {
   const html = translator.renderMarkdown("Intro --- ### 1. 方法 - **Encoder**: 提取特征 - Decoder: 输出结果");
 

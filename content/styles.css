@@ -123,6 +123,8 @@ window {
   color: #111827;
   background: #ffffff;
   line-height: 1.62;
+  user-select: text;
+  -moz-user-select: text;
 }
 
 .markdown-result h1,
@@ -168,6 +170,24 @@ window {
   padding: 0;
   color: #e2e8f0;
   background: transparent;
+}
+
+.markdown-result .scholarmate-math-inline {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: -0.12em;
+}
+
+.markdown-result .scholarmate-math-display {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #0f172a;
+  background: #f8fafc;
+  text-align: center;
 }
 
 .question {

@@ -564,6 +564,7 @@ function installAssistantStyles(doc) {
   if (doc.getElementById("paper-translation-popup-styles")) {
     return;
   }
+  installKatexStyles(doc);
   const style = doc.createElementNS(HTML_NS, "style");
   style.id = "paper-translation-popup-styles";
   style.textContent = [
@@ -578,10 +579,19 @@ function installAssistantStyles(doc) {
     "#paper-translation-popup-markdown-result code { border-radius: 5px; padding: 1px 4px; background: #f1f5f9; color: #0f172a; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }",
     "#paper-translation-popup-markdown-result pre { overflow: auto; margin: 0 0 12px; border-radius: 8px; padding: 12px; background: #0f172a; }",
     "#paper-translation-popup-markdown-result pre code { padding: 0; color: #e2e8f0; background: transparent; }",
-    "#paper-translation-popup-markdown-result .scholarmate-message { margin: 0 0 16px; }",
-    "#paper-translation-popup-markdown-result .scholarmate-speaker { margin: 0 0 6px; font-weight: 700; color: #334155; }",
-    "#paper-translation-popup-markdown-result .scholarmate-message-user .scholarmate-body { white-space: pre-wrap; color: #334155; }",
+    "#paper-translation-popup-markdown-result .scholarmate-message { display: flex; margin: 0 0 14px; }",
+    "#paper-translation-popup-markdown-result .scholarmate-message-user { justify-content: flex-end; }",
+    "#paper-translation-popup-markdown-result .scholarmate-message-assistant { justify-content: flex-start; }",
+    "#paper-translation-popup-markdown-result .scholarmate-bubble { box-sizing: border-box; border: 1px solid #dbe4ee; border-radius: 8px; padding: 10px 12px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05); }",
+    "#paper-translation-popup-markdown-result .scholarmate-bubble-user { max-width: 88%; background: #ecfeff; border-color: #a5f3fc; }",
+    "#paper-translation-popup-markdown-result .scholarmate-bubble-assistant { width: 100%; background: #ffffff; }",
+    "#paper-translation-popup-markdown-result .scholarmate-speaker { margin: 0 0 7px; font-size: 12px; font-weight: 700; color: #64748b; }",
+    "#paper-translation-popup-markdown-result .scholarmate-message-user .scholarmate-speaker { color: #0e7490; text-align: right; }",
+    "#paper-translation-popup-markdown-result .scholarmate-message-user .scholarmate-body { white-space: pre-wrap; color: #164e63; }",
     "#paper-translation-popup-markdown-result .scholarmate-message-assistant .scholarmate-body { color: #0f172a; }",
+    "#paper-translation-popup-markdown-result .scholarmate-body > :last-child { margin-bottom: 0; }",
+    "#paper-translation-popup-markdown-result .scholarmate-math-inline { display: inline-block; max-width: 100%; vertical-align: -0.12em; }",
+    "#paper-translation-popup-markdown-result .scholarmate-math-display { display: block; overflow-x: auto; max-width: 100%; margin: 10px 0 12px; padding: 10px 12px; border-radius: 8px; background: #f8fafc; color: #0f172a; text-align: center; }",
     "#paper-translation-popup-markdown-result hr { margin: 14px 0; border: 0; border-top: 1px solid #e2e8f0; }",
   ].join("\n");
   const head = doc.querySelector("head");
@@ -589,6 +599,48 @@ function installAssistantStyles(doc) {
     head.appendChild(style);
   } else {
     doc.documentElement.appendChild(style);
+  }
+}
+
+function installKatexStyles(doc) {
+  if (!rootURI || doc.getElementById("paper-translation-popup-katex-styles")) {
+    return;
+  }
+  const head = doc.querySelector("head");
+  if (!head) {
+    return;
+  }
+  const link = doc.createElementNS(HTML_NS, "link");
+  link.id = "paper-translation-popup-katex-styles";
+  link.setAttribute("rel", "stylesheet");
+  link.setAttribute("href", contentURL("vendor/katex/katex.min.css"));
+  head.appendChild(link);
+}
+
+function ensureKatexLoaded(window) {
+  if (!window || window.katex || !rootURI) {
+    return;
+  }
+  const loader = getSubScriptLoader();
+  if (!loader || typeof loader.loadSubScript !== "function") {
+    return;
+  }
+  try {
+    loader.loadSubScript(contentURL("vendor/katex/katex.min.js"), window);
+  } catch (error) {
+    logError("KaTeX load failed", error);
+  }
+}
+
+function getSubScriptLoader() {
+  if (Services && Services.scriptloader && typeof Services.scriptloader.loadSubScript === "function") {
+    return Services.scriptloader;
+  }
+  try {
+    return Components.classes["@mozilla.org/moz/jssubscript-loader;1"]
+      .getService(Components.interfaces.mozIJSSubScriptLoader);
+  } catch (_error) {
+    return null;
   }
 }
 
@@ -632,10 +684,12 @@ function createMarkdownResultView(doc) {
     "border: 1px solid #cbd5e1",
     "border-radius: 8px",
     "padding: 14px",
-    "background: #ffffff",
+    "background: #f8fafc",
     "color: #111827",
     "line-height: 1.62",
     "font: menu",
+    "user-select: text",
+    "-moz-user-select: text",
   ].join(";"));
   return view;
 }
@@ -994,7 +1048,7 @@ async function askPaperQuestion(window, mode) {
   try {
     if (!session.paperContext) {
       failureStage = "提取 PDF 全文";
-      session.paperContext = readPaperContext(window);
+      session.paperContext = await readPaperContext(window);
     }
     if (!session.paperContext.text) {
       setPanelText(window, "paper-translation-popup-status", "未能读取当前 PDF 正文，请确认已打开论文阅读器。", true);
@@ -1021,7 +1075,7 @@ async function askPaperQuestion(window, mode) {
     session.messages.push({ role: "assistant", content: sanitizeTransportText(answer).trim() });
     renderCurrentModeResult(window);
     clearQuestion(window);
-    setPanelText(window, "paper-translation-popup-status", "回答完成。", false);
+    setPanelText(window, "paper-translation-popup-status", formatAnswerCompleteStatus(session.paperContext), false);
   } catch (error) {
     logError("Paper question failed", error);
     setPanelText(window, "paper-translation-popup-status", "问答失败（" + failureStage + "）：" + formatUserFacingError(error), true);
@@ -1054,7 +1108,24 @@ function getPaperChatSession(window, mode) {
 }
 
 function readPaperSessionKey(window) {
+  const readerKey = readCurrentReaderSessionKey(window);
+  if (readerKey) {
+    return readerKey;
+  }
   return String(window.document && window.document.title ? window.document.title : "active-pdf");
+}
+
+function readCurrentReaderSessionKey(window) {
+  const reader = getActiveReader(window);
+  const tabID = readReaderTabID(reader);
+  if (tabID) {
+    return "reader-tab:" + tabID;
+  }
+  const selectedTabID = readSelectedTabID(window);
+  if (selectedTabID) {
+    return "selected-tab:" + selectedTabID;
+  }
+  return "";
 }
 
 function clearPaperChatSession(window) {
@@ -1144,6 +1215,8 @@ function renderResultMarkdown(window, markdown) {
   if (!node) {
     return;
   }
+  ensureKatexLoaded(window);
+  node.className = "scholarmate-markdown-surface";
   try {
     renderMarkdownIntoNode(window.document, node, markdown);
   } catch (error) {
@@ -1157,16 +1230,21 @@ function renderConversationMessages(window, messages) {
   if (!node) {
     return;
   }
+  ensureKatexLoaded(window);
+  node.className = "scholarmate-chat-surface";
   clearNode(node);
   for (const message of messages) {
     const role = message && message.role === "assistant" ? "assistant" : "user";
     const container = window.document.createElementNS(HTML_NS, "div");
     container.className = "scholarmate-message scholarmate-message-" + role;
 
+    const bubble = window.document.createElementNS(HTML_NS, "div");
+    bubble.className = "scholarmate-bubble scholarmate-bubble-" + role;
+
     const speaker = window.document.createElementNS(HTML_NS, "div");
     speaker.className = "scholarmate-speaker";
     speaker.textContent = role === "assistant" ? "ScholarMate" : "你";
-    container.appendChild(speaker);
+    bubble.appendChild(speaker);
 
     const body = window.document.createElementNS(HTML_NS, "div");
     body.className = "scholarmate-body";
@@ -1175,7 +1253,8 @@ function renderConversationMessages(window, messages) {
     } else {
       body.textContent = sanitizeTransportText(message.content || "");
     }
-    container.appendChild(body);
+    bubble.appendChild(body);
+    container.appendChild(bubble);
     node.appendChild(container);
   }
 }
@@ -1306,6 +1385,12 @@ function appendMarkdownBlocks(doc, root, markdown) {
       continue;
     }
 
+    const displayMath = parseDisplayMathBlock(block);
+    if (displayMath) {
+      root.appendChild(createMathNode(doc, displayMath, true));
+      continue;
+    }
+
     const lines = block.split("\n");
     if (lines.every((line) => /^\s*[-*]\s+/.test(line))) {
       const list = doc.createElementNS(HTML_NS, "ul");
@@ -1358,7 +1443,7 @@ function appendParagraphLines(doc, node, block) {
 }
 
 function appendInlineMarkdown(doc, node, text) {
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  const pattern = /(`[^`]+`|\\\(.+?\\\)|\$(?!\$)[^$]+?\$|\*\*[^*]+\*\*|\*[^*]+\*)/g;
   let cursor = 0;
   const source = sanitizeTransportText(text);
   let match = pattern.exec(source);
@@ -1371,6 +1456,10 @@ function appendInlineMarkdown(doc, node, text) {
       const code = doc.createElementNS(HTML_NS, "code");
       code.textContent = token.slice(1, -1);
       node.appendChild(code);
+    } else if (token.startsWith("\\(")) {
+      node.appendChild(createMathNode(doc, token.slice(2, -2), false));
+    } else if (token.startsWith("$")) {
+      node.appendChild(createMathNode(doc, token.slice(1, -1), false));
     } else if (token.startsWith("**")) {
       const strong = doc.createElementNS(HTML_NS, "strong");
       strong.textContent = token.slice(2, -2);
@@ -1386,6 +1475,52 @@ function appendInlineMarkdown(doc, node, text) {
   if (cursor < source.length) {
     node.appendChild(doc.createTextNode(source.slice(cursor)));
   }
+}
+
+function parseDisplayMathBlock(block) {
+  const trimmed = String(block || "").trim();
+  const bracketMatch = trimmed.match(/^\\\[\s*([\s\S]*?)\s*\\\]$/);
+  if (bracketMatch) {
+    return bracketMatch[1].trim();
+  }
+  const dollarMatch = trimmed.match(/^\$\$\s*([\s\S]*?)\s*\$\$$/);
+  if (dollarMatch) {
+    return dollarMatch[1].trim();
+  }
+  return "";
+}
+
+function createMathNode(doc, source, displayMode) {
+  const node = doc.createElementNS(HTML_NS, displayMode ? "div" : "span");
+  node.className = "scholarmate-math " + (displayMode ? "scholarmate-math-display" : "scholarmate-math-inline");
+  const formula = sanitizeTransportText(source).trim();
+  const katex = getKatexForDocument(doc);
+  if (katex && typeof katex.render === "function") {
+    try {
+      katex.render(formula, node, {
+        displayMode,
+        throwOnError: false,
+        strict: "ignore",
+        output: "html",
+      });
+      return node;
+    } catch (error) {
+      logError("KaTeX render failed", error);
+    }
+  }
+  node.textContent = formula;
+  return node;
+}
+
+function getKatexForDocument(doc) {
+  const view = doc && doc.defaultView ? doc.defaultView : null;
+  if (view && view.katex) {
+    return view.katex;
+  }
+  if (typeof katex !== "undefined") {
+    return katex;
+  }
+  return null;
 }
 
 function createCodeBlockNode(doc, block) {
@@ -1406,11 +1541,24 @@ function createCodeBlockNode(doc, block) {
 }
 
 function normalizeMarkdownForRendering(markdown) {
+  const displayMathBlocks = [];
   return sanitizeTransportText(markdown)
     .replace(/\r\n/g, "\n")
+    .replace(/\$\$\s*([\s\S]*?)\s*\$\$/g, (_match, formula) => stashDisplayMathBlock(displayMathBlocks, formula))
+    .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_match, formula) => stashDisplayMathBlock(displayMathBlocks, formula))
     .replace(/[ \t]+-{3,}[ \t]+/g, "\n\n---\n\n")
     .replace(/[ \t]+(#{1,4}\s+)/g, "\n\n$1")
-    .replace(/[ \t]+([-*]\s+)/g, "\n$1");
+    .replace(/[ \t]+([-*]\s+)/g, "\n$1")
+    .replace(/\u0000MATHBLOCK(\d+)\u0000/g, (_match, index) => {
+      const formula = displayMathBlocks[Number(index)] || "";
+      return "\n\n\\[\n" + formula.trim() + "\n\\]\n\n";
+    });
+}
+
+function stashDisplayMathBlock(blocks, formula) {
+  const index = blocks.length;
+  blocks.push(String(formula || ""));
+  return "\n\n\u0000MATHBLOCK" + index + "\u0000\n\n";
 }
 
 function renderCodeBlock(block) {
@@ -1462,31 +1610,292 @@ function formatRequestWordCountStatus(selectionData) {
 }
 
 function formatPaperContextStatus(paperContext, reusedContext) {
+  const extractionStatus = formatPaperExtractionStatus(paperContext);
   const parts = reusedContext
     ? ["正在请求 API，沿用已提取的 " + paperContext.pageCount + " 页 PDF 全文"]
     : [
-      "正在请求 API，已提取 " + paperContext.pageCount + " 页",
+      "正在请求 API，" + extractionStatus,
       "移除 " + paperContext.removedMarginLineCount + " 条重复页眉/页脚",
     ];
+  if (reusedContext && extractionStatus) {
+    parts.push(extractionStatus);
+  }
   if (paperContext.truncated) {
     parts.push("因篇幅较长已截断");
   }
   return parts.join("，") + "。";
 }
 
-function readPaperContext(window) {
+function formatPaperExtractionStatus(paperContext) {
+  const source = paperContext && paperContext.extractionSource;
+  if (source === "pdfjs") {
+    const expected = Number(paperContext.pdfExpectedPageCount) || Number(paperContext.pageCount) || 0;
+    const extracted = Number(paperContext.extractedPageCount) || Number(paperContext.pageCount) || 0;
+    return "已通过 PDF.js 提取 " + extracted + "/" + expected + " 页";
+  }
+  if (source === "dom") {
+    return "已通过页面 DOM 提取 " + paperContext.pageCount + " 页（可能只包含当前渲染页）";
+  }
+  return "已提取 " + (paperContext && paperContext.pageCount ? paperContext.pageCount : 0) + " 页";
+}
+
+function formatAnswerCompleteStatus(paperContext) {
+  return "回答完成。提取诊断：" + formatPaperExtractionStatus(paperContext) + "。";
+}
+
+async function readPaperContext(window) {
+  const candidateWindows = getCandidateWindows(window);
+  const diagnostics = createPaperExtractionDiagnostics(candidateWindows);
+  logInfo("PDF extraction started: candidateWindows=" + diagnostics.candidateWindowCount);
+
+  const pdfResult = await extractPaperPagesFromPdfDocuments(candidateWindows, diagnostics);
+  if (pdfResult.pages.length) {
+    diagnostics.extractionSource = "pdfjs";
+    diagnostics.extractedPageCount = pdfResult.pages.length;
+    diagnostics.extractedCharCount = countPageTextChars(pdfResult.pages);
+    const context = buildPaperContext(pdfResult.pages, { maxChars: DEFAULT_PAPER_CONTEXT_MAX_CHARS });
+    logPaperExtractionFinished(diagnostics);
+    return attachPaperExtractionDiagnostics(context, diagnostics);
+  }
+
   let bestPages = [];
-  for (const candidateWindow of getCandidateWindows(window)) {
+  candidateWindows.forEach((candidateWindow, index) => {
     const pages = extractPaperPagesFromWindow(candidateWindow);
-    if (countPageTextChars(pages) > countPageTextChars(bestPages)) {
+    const charCount = countPageTextChars(pages);
+    if (pages.length) {
+      diagnostics.domCandidateCount += 1;
+    }
+    logInfo(
+      "DOM extraction candidate #" + (index + 1)
+      + ": pages=" + pages.length
+      + ", chars=" + charCount
+      + ", " + describeCandidateWindow(candidateWindow)
+    );
+    if (pages.length && !bestPages.length) {
       bestPages = pages;
     }
+  });
+  diagnostics.extractionSource = bestPages.length ? "dom" : "none";
+  diagnostics.extractedPageCount = bestPages.length;
+  diagnostics.extractedCharCount = countPageTextChars(bestPages);
+  if (bestPages.length) {
+    diagnostics.warnings.push("PDF.js document was not available; fell back to rendered DOM pages only.");
+  } else {
+    diagnostics.warnings.push("No readable PDF.js document or rendered DOM pages were found.");
   }
-  return buildPaperContext(bestPages, { maxChars: DEFAULT_PAPER_CONTEXT_MAX_CHARS });
+  const context = buildPaperContext(bestPages, { maxChars: DEFAULT_PAPER_CONTEXT_MAX_CHARS });
+  logPaperExtractionFinished(diagnostics);
+  return attachPaperExtractionDiagnostics(context, diagnostics);
+}
+
+async function extractPaperPagesFromPdfDocuments(candidateWindows, diagnostics) {
+  let selectedPages = [];
+  for (let index = 0; index < candidateWindows.length; index++) {
+    const candidateWindow = candidateWindows[index];
+    const pdfDocument = getPdfDocumentFromWindow(candidateWindow);
+    if (!pdfDocument) {
+      logInfo(
+        "PDF.js candidate #" + (index + 1)
+        + ": unavailable, " + describeCandidateWindow(candidateWindow)
+      );
+      continue;
+    }
+    diagnostics.pdfCandidateCount += 1;
+    const expectedPageCount = Number.isInteger(pdfDocument.numPages) ? pdfDocument.numPages : 0;
+    diagnostics.pdfExpectedPageCount = Math.max(diagnostics.pdfExpectedPageCount, expectedPageCount);
+    const pages = await extractPaperPagesFromPdfDocument(pdfDocument);
+    logInfo(
+      "PDF.js candidate #" + (index + 1)
+      + ": numPages=" + expectedPageCount
+      + ", extractedPages=" + pages.length
+      + ", chars=" + countPageTextChars(pages)
+      + ", " + describeCandidateWindow(candidateWindow)
+    );
+    if (pages.length && !selectedPages.length) {
+      selectedPages = pages;
+    }
+  }
+  return { pages: selectedPages };
+}
+
+function getPdfDocumentFromWindow(candidateWindow) {
+  if (!candidateWindow) {
+    return null;
+  }
+  const unwrappedWindow = unwrapWindow(candidateWindow);
+  const app = unwrappedWindow.PDFViewerApplication || candidateWindow.PDFViewerApplication;
+  if (app && app.pdfDocument) {
+    return app.pdfDocument;
+  }
+  const viewer = app && app.pdfViewer;
+  if (viewer && viewer.pdfDocument) {
+    return viewer.pdfDocument;
+  }
+  if (viewer && viewer._pdfDocument) {
+    return viewer._pdfDocument;
+  }
+  const reader = unwrappedWindow.reader || candidateWindow.reader;
+  const primaryView = reader
+    && reader._internalReader
+    && reader._internalReader._primaryView;
+  const primaryWindow = primaryView && primaryView._iframeWindow;
+  return primaryWindow && primaryWindow !== candidateWindow
+    ? getPdfDocumentFromWindow(primaryWindow)
+    : null;
+}
+
+function unwrapWindow(candidateWindow) {
+  return candidateWindow && candidateWindow.wrappedJSObject
+    ? candidateWindow.wrappedJSObject
+    : candidateWindow;
+}
+
+async function extractPaperPagesFromPdfDocument(pdfDocument) {
+  try {
+    if (!pdfDocument || !Number.isInteger(pdfDocument.numPages) || typeof pdfDocument.getPage !== "function") {
+      return [];
+    }
+    const pages = [];
+    for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber++) {
+      const pdfPage = await pdfDocument.getPage(pageNumber);
+      if (!pdfPage || typeof pdfPage.getTextContent !== "function") {
+        continue;
+      }
+      const textContent = await pdfPage.getTextContent();
+      const text = serializePdfTextContent(textContent);
+      if (normalizeText(text)) {
+        pages.push({ pageNumber, text });
+      }
+    }
+    return pages;
+  } catch (error) {
+    logError("PDF.js full-text extraction failed", error);
+    return [];
+  }
+}
+
+function serializePdfTextContent(textContent) {
+  const items = textContent && Array.isArray(textContent.items) ? textContent.items : [];
+  const positioned = items
+    .map(readPdfTextItem)
+    .filter((item) => item.text);
+  if (!positioned.length) {
+    return "";
+  }
+  if (positioned.some((item) => item.hasPosition)) {
+    return groupPdfTextItems(positioned).join("\n");
+  }
+  return positioned.map((item) => item.text).join(" ");
+}
+
+function readPdfTextItem(item) {
+  const transform = item && Array.isArray(item.transform) ? item.transform : [];
+  return {
+    text: normalizeLine(item && item.str ? item.str : ""),
+    x: Number(transform[4]) || 0,
+    y: Number(transform[5]) || 0,
+    hasPosition: Number.isFinite(transform[4]) && Number.isFinite(transform[5]),
+  };
+}
+
+function groupPdfTextItems(items) {
+  const sorted = items.slice().sort((left, right) => {
+    if (Math.abs(left.y - right.y) > 3) {
+      return right.y - left.y;
+    }
+    return left.x - right.x;
+  });
+  const lines = [];
+  for (const item of sorted) {
+    const last = lines[lines.length - 1];
+    if (!last || Math.abs(last.y - item.y) > 3) {
+      lines.push({ y: item.y, parts: [item.text] });
+    } else {
+      last.parts.push(item.text);
+    }
+  }
+  return lines
+    .map((line) => normalizeLine(line.parts.join(" ")))
+    .filter(Boolean);
 }
 
 function countPageTextChars(pages) {
   return pages.reduce((total, page) => total + String(page.text || "").length, 0);
+}
+
+function createPaperExtractionDiagnostics(candidateWindows) {
+  return {
+    candidateWindowCount: Array.isArray(candidateWindows) ? candidateWindows.length : 0,
+    pdfCandidateCount: 0,
+    pdfExpectedPageCount: 0,
+    domCandidateCount: 0,
+    extractedPageCount: 0,
+    extractedCharCount: 0,
+    extractionSource: "none",
+    warnings: [],
+  };
+}
+
+function attachPaperExtractionDiagnostics(context, diagnostics) {
+  const target = context || {};
+  target.extractionSource = diagnostics.extractionSource;
+  target.candidateWindowCount = diagnostics.candidateWindowCount;
+  target.pdfCandidateCount = diagnostics.pdfCandidateCount;
+  target.pdfExpectedPageCount = diagnostics.pdfExpectedPageCount;
+  target.domCandidateCount = diagnostics.domCandidateCount;
+  target.extractedPageCount = diagnostics.extractedPageCount;
+  target.extractedCharCount = diagnostics.extractedCharCount;
+  target.extractionWarnings = diagnostics.warnings.slice();
+  return target;
+}
+
+function logPaperExtractionFinished(diagnostics) {
+  logInfo(
+    "PDF extraction finished: source=" + diagnostics.extractionSource
+    + ", extractedPages=" + diagnostics.extractedPageCount
+    + ", expectedPages=" + diagnostics.pdfExpectedPageCount
+    + ", chars=" + diagnostics.extractedCharCount
+    + ", pdfCandidates=" + diagnostics.pdfCandidateCount
+    + ", domCandidates=" + diagnostics.domCandidateCount
+    + ", candidateWindows=" + diagnostics.candidateWindowCount
+  );
+  for (const warning of diagnostics.warnings) {
+    logInfo("PDF extraction warning: " + warning);
+  }
+}
+
+function describeCandidateWindow(candidateWindow) {
+  if (!candidateWindow) {
+    return "window=null";
+  }
+  const unwrappedWindow = unwrapWindow(candidateWindow);
+  const doc = candidateWindow.document || unwrappedWindow.document;
+  const app = unwrappedWindow.PDFViewerApplication || candidateWindow.PDFViewerApplication;
+  const reader = unwrappedWindow.reader || candidateWindow.reader;
+  const features = [];
+  if (candidateWindow.wrappedJSObject) {
+    features.push("wrappedJSObject");
+  }
+  if (app) {
+    features.push("PDFViewerApplication");
+  }
+  if (app && app.pdfViewer) {
+    features.push("pdfViewer");
+  }
+  if (reader) {
+    features.push("reader");
+  }
+  if (doc && typeof doc.querySelectorAll === "function") {
+    features.push("document");
+  }
+  return "title=" + sanitizeLogValue(doc && doc.title ? doc.title : "")
+    + ", features=" + (features.length ? features.join("|") : "none");
+}
+
+function sanitizeLogValue(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
 }
 
 function extractPaperPagesFromWindow(candidateWindow) {
@@ -1701,6 +2110,10 @@ function readSelectionData(window) {
 
 function getCandidateWindows(window) {
   const candidates = [];
+  for (const readerWindow of getActiveReaderWindows(window)) {
+    addCandidate(candidates, readerWindow);
+  }
+
   addCandidate(candidates, window);
   addCandidate(candidates, window.document.commandDispatcher && window.document.commandDispatcher.focusedWindow);
   addCandidate(candidates, window.document.activeElement && window.document.activeElement.contentWindow);
@@ -1714,7 +2127,141 @@ function getCandidateWindows(window) {
     addCandidate(candidates, nestedWindow);
   }
 
+  for (const readerWindow of getReaderRegistryWindows()) {
+    addCandidate(candidates, readerWindow);
+  }
+
   return candidates;
+}
+
+function getActiveReaderWindows(window) {
+  const windows = [];
+  addReaderWindows(windows, getActiveReader(window));
+  return windows;
+}
+
+function getReaderRegistryWindows() {
+  const windows = [];
+  const activeReader = getActiveReader();
+  addReaderWindows(windows, activeReader);
+
+  const readers = getZoteroReaders();
+  for (const reader of readers) {
+    if (reader !== activeReader) {
+      addReaderWindows(windows, reader);
+    }
+  }
+  return windows;
+}
+
+function getActiveReader(window) {
+  const readerAPI = typeof Zotero !== "undefined" && Zotero && Zotero.Reader ? Zotero.Reader : null;
+  const selectedTabID = readSelectedTabID(window);
+  if (readerAPI && selectedTabID && typeof readerAPI.getByTabID === "function") {
+    try {
+      const reader = readerAPI.getByTabID(selectedTabID);
+      if (reader) {
+        return reader;
+      }
+    } catch (_error) {
+      // Fall back to scanning the reader registry below.
+    }
+  }
+
+  const readers = getZoteroReaders();
+  if (selectedTabID) {
+    for (const reader of readers) {
+      if (readReaderTabID(reader) === selectedTabID) {
+        return reader;
+      }
+    }
+  }
+
+  for (const reader of readers) {
+    if (reader && (reader.active || reader._active || reader.selected || reader._selected)) {
+      return reader;
+    }
+  }
+  return null;
+}
+
+function getZoteroReaders() {
+  return typeof Zotero !== "undefined" && Zotero && Zotero.Reader && Array.isArray(Zotero.Reader._readers)
+    ? Zotero.Reader._readers
+    : [];
+}
+
+function readSelectedTabID(window) {
+  const tabs = getZoteroTabs(window);
+  if (!tabs) {
+    return "";
+  }
+  const selected = typeof tabs.getSelectedID === "function" ? callWithoutThrow(tabs, "getSelectedID") : null;
+  return normalizeIdentifier(
+    selected
+    || tabs.selectedID
+    || tabs.selectedId
+    || tabs._selectedID
+    || tabs._selectedId
+    || tabs.selected
+    || tabs._selected
+  );
+}
+
+function getZoteroTabs(window) {
+  if (window && window.Zotero_Tabs) {
+    return window.Zotero_Tabs;
+  }
+  if (typeof Zotero_Tabs !== "undefined") {
+    return Zotero_Tabs;
+  }
+  return null;
+}
+
+function callWithoutThrow(target, method) {
+  try {
+    return target[method]();
+  } catch (_error) {
+    return null;
+  }
+}
+
+function readReaderTabID(reader) {
+  if (!reader) {
+    return "";
+  }
+  return normalizeIdentifier(
+    reader.tabID
+    || reader.tabId
+    || reader._tabID
+    || reader._tabId
+    || reader.id
+    || reader._id
+  );
+}
+
+function normalizeIdentifier(value) {
+  if (value && typeof value === "object") {
+    return normalizeIdentifier(value.id || value.ID || value.tabID || value.tabId || value._id);
+  }
+  const normalized = String(value || "").trim();
+  return normalized && normalized !== "undefined" && normalized !== "null" ? normalized : "";
+}
+
+function addReaderWindows(windows, reader) {
+  if (!reader) {
+    return;
+  }
+  addCandidate(windows, reader._iframeWindow);
+  addCandidate(windows, reader.iframeWindow);
+  addCandidate(windows, reader.window);
+  const internalReader = reader && reader._internalReader;
+  addCandidate(windows, internalReader && internalReader._primaryView && internalReader._primaryView._iframeWindow);
+  addCandidate(windows, internalReader && internalReader._secondaryView && internalReader._secondaryView._iframeWindow);
+  const readerViews = internalReader && Array.isArray(internalReader._views) ? internalReader._views : [];
+  for (const view of readerViews) {
+    addCandidate(windows, view && view._iframeWindow);
+  }
 }
 
 function addCandidate(candidates, candidate) {
@@ -2133,7 +2680,11 @@ function sanitizeTransportText(text) {
 
 function logError(message, error) {
   const details = error && error.stack ? error.stack : String(error || "");
+  logInfo(message + ": " + details);
+}
+
+function logInfo(message) {
   if (typeof Zotero !== "undefined" && Zotero.debug) {
-    Zotero.debug("[ScholarMate] " + message + ": " + details);
+    Zotero.debug("[ScholarMate] " + message);
   }
 }

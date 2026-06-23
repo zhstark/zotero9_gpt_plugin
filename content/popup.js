@@ -175,7 +175,7 @@
 
     try {
       if (!session.paperContext) {
-        session.paperContext = readPaperContext();
+        session.paperContext = await readPaperContext();
       }
       if (!session.paperContext.text) {
         setStatus("未能读取当前 PDF 正文，请确认已打开论文阅读器。", true);
@@ -199,7 +199,7 @@
       session.messages.push({ role: "assistant", content: answer });
       renderCurrentModeResult();
       questionInput.value = "";
-      setStatus("回答完成。", false);
+      setStatus(formatAnswerCompleteStatus(session.paperContext), false);
     } catch (error) {
       logError(error);
       setStatus("问答失败，请检查 PDF、网络、模型名或 OpenAI access token。", true);
@@ -229,7 +229,24 @@
   }
 
   function readPaperSessionKey() {
+    const readerKey = readCurrentReaderSessionKey();
+    if (readerKey) {
+      return readerKey;
+    }
     return String(openerWindow && openerWindow.document && openerWindow.document.title ? openerWindow.document.title : "active-pdf");
+  }
+
+  function readCurrentReaderSessionKey() {
+    const reader = getActiveReader();
+    const tabID = readReaderTabID(reader);
+    if (tabID) {
+      return "reader-tab:" + tabID;
+    }
+    const selectedTabID = readSelectedTabID();
+    if (selectedTabID) {
+      return "selected-tab:" + selectedTabID;
+    }
+    return "";
   }
 
   function clearPaperChatSession() {
@@ -273,37 +290,304 @@
   }
 
   function formatPaperContextStatus(paperContext, reusedContext) {
+    const extractionStatus = formatPaperExtractionStatus(paperContext);
     const parts = reusedContext
       ? ["正在请求 API，沿用已提取的 " + paperContext.pageCount + " 页 PDF 全文"]
       : [
-        "正在请求 API，已提取 " + paperContext.pageCount + " 页",
+        "正在请求 API，" + extractionStatus,
         "移除 " + paperContext.removedMarginLineCount + " 条重复页眉/页脚",
       ];
+    if (reusedContext && extractionStatus) {
+      parts.push(extractionStatus);
+    }
     if (paperContext.truncated) {
       parts.push("因篇幅较长已截断");
     }
     return parts.join("，") + "。";
   }
 
-  function readPaperContext() {
+  function formatPaperExtractionStatus(paperContext) {
+    const source = paperContext && paperContext.extractionSource;
+    if (source === "pdfjs") {
+      const expected = Number(paperContext.pdfExpectedPageCount) || Number(paperContext.pageCount) || 0;
+      const extracted = Number(paperContext.extractedPageCount) || Number(paperContext.pageCount) || 0;
+      return "已通过 PDF.js 提取 " + extracted + "/" + expected + " 页";
+    }
+    if (source === "dom") {
+      return "已通过页面 DOM 提取 " + paperContext.pageCount + " 页（可能只包含当前渲染页）";
+    }
+    return "已提取 " + (paperContext && paperContext.pageCount ? paperContext.pageCount : 0) + " 页";
+  }
+
+  function formatAnswerCompleteStatus(paperContext) {
+    return "回答完成。提取诊断：" + formatPaperExtractionStatus(paperContext) + "。";
+  }
+
+  async function readPaperContext() {
+    const candidateWindows = getCandidateWindows();
+    const diagnostics = createPaperExtractionDiagnostics(candidateWindows);
+    logInfo("PDF extraction started: candidateWindows=" + diagnostics.candidateWindowCount);
+
+    const pdfResult = await extractPaperPagesFromPdfDocuments(candidateWindows, diagnostics);
+    if (pdfResult.pages.length) {
+      diagnostics.extractionSource = "pdfjs";
+      diagnostics.extractedPageCount = pdfResult.pages.length;
+      diagnostics.extractedCharCount = countPageTextChars(pdfResult.pages);
+      const context = ZoteroTranslationTranslator.buildPaperContext(pdfResult.pages, {
+        maxChars: DEFAULT_PAPER_CONTEXT_MAX_CHARS,
+      });
+      logPaperExtractionFinished(diagnostics);
+      return attachPaperExtractionDiagnostics(context, diagnostics);
+    }
+
     let bestPages = [];
-    for (const candidateWindow of getCandidateWindows()) {
+    candidateWindows.forEach((candidateWindow, index) => {
       const pages = extractPaperPagesFromWindow(candidateWindow);
-      if (countPageTextChars(pages) > countPageTextChars(bestPages)) {
+      const charCount = countPageTextChars(pages);
+      if (pages.length) {
+        diagnostics.domCandidateCount += 1;
+      }
+      logInfo(
+        "DOM extraction candidate #" + (index + 1)
+        + ": pages=" + pages.length
+        + ", chars=" + charCount
+        + ", " + describeCandidateWindow(candidateWindow)
+      );
+      if (pages.length && !bestPages.length) {
         bestPages = pages;
       }
+    });
+    diagnostics.extractionSource = bestPages.length ? "dom" : "none";
+    diagnostics.extractedPageCount = bestPages.length;
+    diagnostics.extractedCharCount = countPageTextChars(bestPages);
+    if (bestPages.length) {
+      diagnostics.warnings.push("PDF.js document was not available; fell back to rendered DOM pages only.");
+    } else {
+      diagnostics.warnings.push("No readable PDF.js document or rendered DOM pages were found.");
     }
-    return ZoteroTranslationTranslator.buildPaperContext(bestPages, {
+    const context = ZoteroTranslationTranslator.buildPaperContext(bestPages, {
       maxChars: DEFAULT_PAPER_CONTEXT_MAX_CHARS,
     });
+    logPaperExtractionFinished(diagnostics);
+    return attachPaperExtractionDiagnostics(context, diagnostics);
+  }
+
+  async function extractPaperPagesFromPdfDocuments(candidateWindows, diagnostics) {
+    let selectedPages = [];
+    for (let index = 0; index < candidateWindows.length; index++) {
+      const candidateWindow = candidateWindows[index];
+      const pdfDocument = getPdfDocumentFromWindow(candidateWindow);
+      if (!pdfDocument) {
+        logInfo(
+          "PDF.js candidate #" + (index + 1)
+          + ": unavailable, " + describeCandidateWindow(candidateWindow)
+        );
+        continue;
+      }
+      diagnostics.pdfCandidateCount += 1;
+      const expectedPageCount = Number.isInteger(pdfDocument.numPages) ? pdfDocument.numPages : 0;
+      diagnostics.pdfExpectedPageCount = Math.max(diagnostics.pdfExpectedPageCount, expectedPageCount);
+      const pages = await extractPaperPagesFromPdfDocument(pdfDocument);
+      logInfo(
+        "PDF.js candidate #" + (index + 1)
+        + ": numPages=" + expectedPageCount
+        + ", extractedPages=" + pages.length
+        + ", chars=" + countPageTextChars(pages)
+        + ", " + describeCandidateWindow(candidateWindow)
+      );
+      if (pages.length && !selectedPages.length) {
+        selectedPages = pages;
+      }
+    }
+    return { pages: selectedPages };
+  }
+
+  function getPdfDocumentFromWindow(candidateWindow) {
+    if (!candidateWindow) {
+      return null;
+    }
+    const unwrappedWindow = unwrapWindow(candidateWindow);
+    const app = unwrappedWindow.PDFViewerApplication || candidateWindow.PDFViewerApplication;
+    if (app && app.pdfDocument) {
+      return app.pdfDocument;
+    }
+    const viewer = app && app.pdfViewer;
+    if (viewer && viewer.pdfDocument) {
+      return viewer.pdfDocument;
+    }
+    if (viewer && viewer._pdfDocument) {
+      return viewer._pdfDocument;
+    }
+    const reader = unwrappedWindow.reader || candidateWindow.reader;
+    const primaryView = reader
+      && reader._internalReader
+      && reader._internalReader._primaryView;
+    const primaryWindow = primaryView && primaryView._iframeWindow;
+    return primaryWindow && primaryWindow !== candidateWindow
+      ? getPdfDocumentFromWindow(primaryWindow)
+      : null;
+  }
+
+  function unwrapWindow(candidateWindow) {
+    return candidateWindow && candidateWindow.wrappedJSObject
+      ? candidateWindow.wrappedJSObject
+      : candidateWindow;
+  }
+
+  async function extractPaperPagesFromPdfDocument(pdfDocument) {
+    try {
+      if (!pdfDocument || !Number.isInteger(pdfDocument.numPages) || typeof pdfDocument.getPage !== "function") {
+        return [];
+      }
+      const pages = [];
+      for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber++) {
+        const pdfPage = await pdfDocument.getPage(pageNumber);
+        if (!pdfPage || typeof pdfPage.getTextContent !== "function") {
+          continue;
+        }
+        const textContent = await pdfPage.getTextContent();
+        const text = serializePdfTextContent(textContent);
+        if (normalizeText(text)) {
+          pages.push({ pageNumber, text });
+        }
+      }
+      return pages;
+    } catch (error) {
+      logError(error);
+      return [];
+    }
+  }
+
+  function serializePdfTextContent(textContent) {
+    const items = textContent && Array.isArray(textContent.items) ? textContent.items : [];
+    const positioned = items
+      .map(readPdfTextItem)
+      .filter((item) => item.text);
+    if (!positioned.length) {
+      return "";
+    }
+    if (positioned.some((item) => item.hasPosition)) {
+      return groupPdfTextItems(positioned).join("\n");
+    }
+    return positioned.map((item) => item.text).join(" ");
+  }
+
+  function readPdfTextItem(item) {
+    const transform = item && Array.isArray(item.transform) ? item.transform : [];
+    return {
+      text: normalizeLine(item && item.str ? item.str : ""),
+      x: Number(transform[4]) || 0,
+      y: Number(transform[5]) || 0,
+      hasPosition: Number.isFinite(transform[4]) && Number.isFinite(transform[5]),
+    };
+  }
+
+  function groupPdfTextItems(items) {
+    const sorted = items.slice().sort((left, right) => {
+      if (Math.abs(left.y - right.y) > 3) {
+        return right.y - left.y;
+      }
+      return left.x - right.x;
+    });
+    const lines = [];
+    for (const item of sorted) {
+      const last = lines[lines.length - 1];
+      if (!last || Math.abs(last.y - item.y) > 3) {
+        lines.push({ y: item.y, parts: [item.text] });
+      } else {
+        last.parts.push(item.text);
+      }
+    }
+    return lines
+      .map((line) => normalizeLine(line.parts.join(" ")))
+      .filter(Boolean);
   }
 
   function countPageTextChars(pages) {
     return pages.reduce((total, page) => total + String(page.text || "").length, 0);
   }
 
+  function createPaperExtractionDiagnostics(candidateWindows) {
+    return {
+      candidateWindowCount: Array.isArray(candidateWindows) ? candidateWindows.length : 0,
+      pdfCandidateCount: 0,
+      pdfExpectedPageCount: 0,
+      domCandidateCount: 0,
+      extractedPageCount: 0,
+      extractedCharCount: 0,
+      extractionSource: "none",
+      warnings: [],
+    };
+  }
+
+  function attachPaperExtractionDiagnostics(context, diagnostics) {
+    const target = context || {};
+    target.extractionSource = diagnostics.extractionSource;
+    target.candidateWindowCount = diagnostics.candidateWindowCount;
+    target.pdfCandidateCount = diagnostics.pdfCandidateCount;
+    target.pdfExpectedPageCount = diagnostics.pdfExpectedPageCount;
+    target.domCandidateCount = diagnostics.domCandidateCount;
+    target.extractedPageCount = diagnostics.extractedPageCount;
+    target.extractedCharCount = diagnostics.extractedCharCount;
+    target.extractionWarnings = diagnostics.warnings.slice();
+    return target;
+  }
+
+  function logPaperExtractionFinished(diagnostics) {
+    logInfo(
+      "PDF extraction finished: source=" + diagnostics.extractionSource
+      + ", extractedPages=" + diagnostics.extractedPageCount
+      + ", expectedPages=" + diagnostics.pdfExpectedPageCount
+      + ", chars=" + diagnostics.extractedCharCount
+      + ", pdfCandidates=" + diagnostics.pdfCandidateCount
+      + ", domCandidates=" + diagnostics.domCandidateCount
+      + ", candidateWindows=" + diagnostics.candidateWindowCount
+    );
+    for (const warning of diagnostics.warnings) {
+      logInfo("PDF extraction warning: " + warning);
+    }
+  }
+
+  function describeCandidateWindow(candidateWindow) {
+    if (!candidateWindow) {
+      return "window=null";
+    }
+    const unwrappedWindow = unwrapWindow(candidateWindow);
+    const doc = candidateWindow.document || unwrappedWindow.document;
+    const app = unwrappedWindow.PDFViewerApplication || candidateWindow.PDFViewerApplication;
+    const reader = unwrappedWindow.reader || candidateWindow.reader;
+    const features = [];
+    if (candidateWindow.wrappedJSObject) {
+      features.push("wrappedJSObject");
+    }
+    if (app) {
+      features.push("PDFViewerApplication");
+    }
+    if (app && app.pdfViewer) {
+      features.push("pdfViewer");
+    }
+    if (reader) {
+      features.push("reader");
+    }
+    if (doc && typeof doc.querySelectorAll === "function") {
+      features.push("document");
+    }
+    return "title=" + sanitizeLogValue(doc && doc.title ? doc.title : "")
+      + ", features=" + (features.length ? features.join("|") : "none");
+  }
+
+  function sanitizeLogValue(value) {
+    return String(value || "")
+      .replace(/\s+/g, " ")
+      .slice(0, 120);
+  }
+
   function getCandidateWindows() {
     const candidates = [];
+    for (const readerWindow of getActiveReaderWindows()) {
+      addCandidate(candidates, readerWindow);
+    }
+
     addCandidate(candidates, openerWindow);
 
     if (openerWindow && openerWindow.document) {
@@ -314,7 +598,131 @@
       addCandidate(candidates, browser && browser.contentWindow);
     }
 
+    for (const readerWindow of getReaderRegistryWindows()) {
+      addCandidate(candidates, readerWindow);
+    }
+
     return candidates;
+  }
+
+  function getReaderRegistryWindows() {
+    const windows = [];
+    const activeReader = getActiveReader();
+    addReaderWindows(windows, activeReader);
+
+    const readers = getZoteroReaders();
+    for (const reader of readers) {
+      if (reader !== activeReader) {
+        addReaderWindows(windows, reader);
+      }
+    }
+    return windows;
+  }
+
+  function getActiveReaderWindows() {
+    const windows = [];
+    addReaderWindows(windows, getActiveReader());
+    return windows;
+  }
+
+  function getActiveReader() {
+    const readerAPI = openerWindow && openerWindow.Zotero && openerWindow.Zotero.Reader ? openerWindow.Zotero.Reader : null;
+    const selectedTabID = readSelectedTabID();
+    if (readerAPI && selectedTabID && typeof readerAPI.getByTabID === "function") {
+      try {
+        const reader = readerAPI.getByTabID(selectedTabID);
+        if (reader) {
+          return reader;
+        }
+      } catch (_error) {
+        // Fall back to scanning the reader registry below.
+      }
+    }
+
+    const readers = getZoteroReaders();
+    if (selectedTabID) {
+      for (const reader of readers) {
+        if (readReaderTabID(reader) === selectedTabID) {
+          return reader;
+        }
+      }
+    }
+
+    for (const reader of readers) {
+      if (reader && (reader.active || reader._active || reader.selected || reader._selected)) {
+        return reader;
+      }
+    }
+    return null;
+  }
+
+  function getZoteroReaders() {
+    return openerWindow && openerWindow.Zotero && openerWindow.Zotero.Reader && Array.isArray(openerWindow.Zotero.Reader._readers)
+      ? openerWindow.Zotero.Reader._readers
+      : [];
+  }
+
+  function readSelectedTabID() {
+    const tabs = openerWindow && openerWindow.Zotero_Tabs ? openerWindow.Zotero_Tabs : null;
+    if (!tabs) {
+      return "";
+    }
+    const selected = typeof tabs.getSelectedID === "function" ? callWithoutThrow(tabs, "getSelectedID") : null;
+    return normalizeIdentifier(
+      selected
+      || tabs.selectedID
+      || tabs.selectedId
+      || tabs._selectedID
+      || tabs._selectedId
+      || tabs.selected
+      || tabs._selected
+    );
+  }
+
+  function callWithoutThrow(target, method) {
+    try {
+      return target[method]();
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function readReaderTabID(reader) {
+    if (!reader) {
+      return "";
+    }
+    return normalizeIdentifier(
+      reader.tabID
+      || reader.tabId
+      || reader._tabID
+      || reader._tabId
+      || reader.id
+      || reader._id
+    );
+  }
+
+  function normalizeIdentifier(value) {
+    if (value && typeof value === "object") {
+      return normalizeIdentifier(value.id || value.ID || value.tabID || value.tabId || value._id);
+    }
+    const normalized = String(value || "").trim();
+    return normalized && normalized !== "undefined" && normalized !== "null" ? normalized : "";
+  }
+
+  function addReaderWindows(windows, reader) {
+    if (!reader) {
+      return;
+    }
+    addCandidate(windows, reader._iframeWindow);
+    addCandidate(windows, reader.iframeWindow);
+    addCandidate(windows, reader.window);
+    const internalReader = reader && reader._internalReader;
+    addCandidate(windows, internalReader && internalReader._primaryView && internalReader._primaryView._iframeWindow);
+    addCandidate(windows, internalReader && internalReader._secondaryView && internalReader._secondaryView._iframeWindow);
+    const readerViews = internalReader && Array.isArray(internalReader._views) ? internalReader._views : [];
+    for (const view of readerViews) {
+      addCandidate(windows, view && view._iframeWindow);
+    }
   }
 
   function extractPaperPagesFromWindow(candidateWindow) {
@@ -593,9 +1001,12 @@
   }
 
   function logError(error) {
+    logInfo(error && error.stack ? error.stack : String(error));
+  }
+
+  function logInfo(message) {
     try {
       const zotero = openerWindow && openerWindow.Zotero;
-      const message = error && error.stack ? error.stack : String(error);
       if (zotero && typeof zotero.debug === "function") {
         zotero.debug(`[ScholarMate] ${message}`);
       }
